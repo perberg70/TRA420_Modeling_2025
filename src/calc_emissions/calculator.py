@@ -17,6 +17,7 @@ import pandas as pd
 import yaml
 
 from .constants import BASE_DEMAND_CASE, BASE_MIX_CASE, POLLUTANTS
+from .demand_model import build_dynamic_demand_series
 
 LOGGER = logging.getLogger("calc_emissions")
 if not LOGGER.handlers:
@@ -235,7 +236,13 @@ def run_from_config(
         per_mix_results[mix_name] = {}
         for demand_name in demand_scenarios:
             LOGGER.info("  • demand case '%s'", demand_name)
-            demand_series = _resolve_demand_series(years, demand_scenarios, demand_name, None)
+            demand_series = _resolve_demand_series(
+                years,
+                demand_scenarios,
+                demand_name,
+                None,
+                config_path=config_path,
+            )
             mix_shares_current = mix_shares
             if synthetic_mix and demand_name in scenario_mix_overrides:
                 mix_shares_current = _resolve_mix_shares(
@@ -515,11 +522,26 @@ def _resolve_demand_series(
     scenarios: Mapping[str, Mapping[str, Mapping]],
     scenario_name: str | None,
     custom: Mapping[int, float] | None,
+    *,
+    config_path: Path | None = None,
 ) -> pd.Series:
     if scenario_name:
         scenario = scenarios.get(scenario_name)
         if scenario is None:
             raise ValueError(f"Demand scenario '{scenario_name}' not found in config.")
+        dynamic_model = scenario.get("dynamic_model")
+        if dynamic_model is not None:
+            if config_path is None:
+                raise ValueError("config_path is required for dynamic demand scenarios.")
+            if not isinstance(dynamic_model, Mapping):
+                raise TypeError(
+                    f"Demand scenario '{scenario_name}' dynamic_model must be a mapping."
+                )
+            return build_dynamic_demand_series(
+                dynamic_model,
+                years,
+                config_path=config_path,
+            )
         values = scenario.get("values")
         if not values:
             raise ValueError(f"Demand scenario '{scenario_name}' must define 'values'.")

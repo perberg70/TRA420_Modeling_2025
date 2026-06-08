@@ -64,6 +64,14 @@ write_per_country_results(per_country_map, Path("results/my_run/emissions"))
 
 `per_country_map` must follow `{Country: {scenario_name: EmissionScenarioResult}}` which is the structure returned by `run_calc_emissions.py`.
 
+Demand cases can also be dynamic. Add a `dynamic_model` block inside a country
+`demand_scenarios` entry to read base electricity demand from
+`data/calc_emissions/Electricity_OECD.xlsx` and scale it by electrification,
+income/GDP, and electricity price paths. Static `values` demand cases remain
+supported. Use `TODO_SOURCE` for income, price, or electrification inputs that
+still need a data source or explicit scenario assumption; see
+`docs/calc_emissions.md` for the schema and validation bounds.
+
 ### Aggregate emissions across all countries
 
 Compute deltas for all countries and write the sum by mix to `results/<run>/emissions/All_countries/<mix>/co2.csv` (with per-demand columns):
