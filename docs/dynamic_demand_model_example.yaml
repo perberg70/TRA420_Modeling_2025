@@ -1,0 +1,54 @@
+# Dynamic electricity demand scenario template.
+#
+# Copy the relevant demand_scenarios entry into a country config under:
+#   calc_emissions:
+#     demand_scenarios:
+#
+# Keep TODO_SOURCE values until a data source or explicit scenario assumption
+# has been selected. The model rejects TODO_SOURCE at runtime.
+
+calc_emissions:
+  demand_scenarios:
+    dynamic_linear_time:
+      description: Dynamic electricity demand using time-based electrification.
+      dynamic_model:
+        base_year: 2023
+        base_demand:
+          source: data/calc_emissions/Electricity_OECD.xlsx
+          country_code: SRB
+          demand_column: Total electricity demand
+          year: 2023
+        income:
+          source: TODO_SOURCE
+          value_column: TODO_SOURCE
+        price:
+          source: TODO_SOURCE
+          value_column: TODO_SOURCE
+        electrification:
+          form: linear_time
+          A: TODO_SOURCE
+          slope: TODO_SOURCE
+        income_elasticity: TODO_SOURCE  # B, must be >= 1.0
+        price_elasticity: TODO_SOURCE  # C, must satisfy -0.8 <= C <= -0.2
+
+    dynamic_linear_income:
+      description: Dynamic electricity demand using income-based electrification.
+      dynamic_model:
+        base_year: 2023
+        base_demand:
+          source: data/calc_emissions/Electricity_OECD.xlsx
+          country_code: SRB
+          demand_column: Total electricity demand
+          year: 2023
+        income:
+          source: TODO_SOURCE
+          value_column: TODO_SOURCE
+        price:
+          source: TODO_SOURCE
+          value_column: TODO_SOURCE
+        electrification:
+          form: linear_income
+          base_share: TODO_SOURCE
+          slope: TODO_SOURCE
+        income_elasticity: TODO_SOURCE  # B, must be >= 1.0
+        price_elasticity: TODO_SOURCE  # C, must satisfy -0.8 <= C <= -0.2

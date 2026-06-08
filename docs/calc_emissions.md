@@ -91,35 +91,16 @@ case can also opt into `dynamic_model`, which computes electricity demand while
 reading base demand from the `Reference values` table in
 `data/calc_emissions/Electricity_OECD.xlsx` instead of hard-coding it.
 
-```yaml
-demand_scenarios:
-  dynamic_reference:
-    dynamic_model:
-      base_demand:
-        source: data/calc_emissions/Electricity_OECD.xlsx
-        country_code: SRB
-        demand_column: Total electricity demand
-        year: 2023
-      income:
-        source: TODO_SOURCE
-        value_column: TODO_SOURCE
-      price:
-        source: TODO_SOURCE
-        value_column: TODO_SOURCE
-      electrification:
-        form: linear_time
-        A: TODO_SOURCE
-        B: TODO_SOURCE
-      income_elasticity: TODO_SOURCE
-      price_elasticity: TODO_SOURCE
-```
+Use `docs/dynamic_demand_model_example.yaml` as the standalone YAML template.
+It includes both supported electrification forms and keeps unresolved inputs as
+`TODO_SOURCE` until a data source or explicit scenario assumption is selected.
 
 The model uses:
 
 $$
 D_t = D_0 \times \frac{e_t}{e_0} \times
-\left(\frac{Y_t}{Y_0}\right)^{\epsilon_Y} \times
-\left(\frac{P_t}{P_0}\right)^{\epsilon_P}
+\left(\frac{Y_t}{Y_0}\right)^B \times
+\left(\frac{P_t}{P_0}\right)^C
 $$
 
 where `D_0` is read from the workbook. The reference table is expected to provide
@@ -130,32 +111,17 @@ GWh / 1,000; TWh unchanged. For example, SRB's 2023 value of 30,021 GWh becomes
 
 Elasticity constraints are enforced when the model is loaded:
 
-- `income_elasticity >= 1.0`
-- `-0.8 <= price_elasticity <= -0.2`
+- income elasticity `B`: `income_elasticity >= 1.0`
+- price elasticity `C`: `-0.8 <= price_elasticity <= -0.2`
 
-Electrification supports two calculated forms:
-
-```yaml
-electrification:
-  form: linear_time
-  A: TODO_SOURCE
-  B: TODO_SOURCE
-```
-
-or:
-
-```yaml
-electrification:
-  form: linear_income
-  base_share: TODO_SOURCE
-  B: TODO_SOURCE
-```
-
-`linear_time` evaluates `e_t = A + B * (year - base_year)`. `linear_income`
-defaults to `e_t = e_base + B * (Y_t - Y_base)` when `base_share` is present; it
-also supports `e_t = A + B * Y_t` when `A` is supplied instead. Electrification
-shares are validated to stay within `[0, 1]`; set `bounds: clamp` only when
-clamping is an explicit scenario assumption.
+Electrification supports two calculated forms. `linear_time` evaluates
+`e_t = A + slope * (year - base_year)`. `linear_income` defaults to
+`e_t = e_base + slope * (Y_t - Y_base)` when `base_share` is present; it also
+supports `e_t = A + slope * Y_t` when `A` is supplied instead. The runtime still
+accepts `B` as an electrification slope alias for the original linear equation,
+but the standalone YAML template uses `slope` to avoid overloading income
+elasticity `B`. Electrification shares are validated to stay within `[0, 1]`;
+set `bounds: clamp` only when clamping is an explicit scenario assumption.
 
 ## Outputs
 
