@@ -91,7 +91,7 @@ case can also opt into `dynamic_model`, which computes electricity demand while
 reading base demand from the `Reference values` table in
 `data/calc_emissions/Electricity_OECD.xlsx` instead of hard-coding it.
 
-Use `docs/dynamic_demand_model_example.yaml` as the standalone YAML template.
+Use `data/calc_emissions/configs/dynamic_demand_model_example.yaml` as the standalone YAML template.
 It includes both supported electrification forms and keeps unresolved inputs as
 `TODO_SOURCE` until a data source or explicit scenario assumption is selected.
 

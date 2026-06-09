@@ -70,7 +70,7 @@ Demand cases can also be dynamic. Add a `dynamic_model` block inside a country
 income/GDP, and electricity price paths. Static `values` demand cases remain
 supported. Use `TODO_SOURCE` for income, price, or electrification inputs that
 still need a data source or explicit scenario assumption; see
-`docs/dynamic_demand_model_example.yaml` for a standalone template and
+`data/calc_emissions/configs/dynamic_demand_model_example.yaml` for a standalone template and
 `docs/calc_emissions.md` for validation bounds.
 
 ### Aggregate emissions across all countries
