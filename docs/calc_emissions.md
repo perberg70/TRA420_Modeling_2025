@@ -95,7 +95,8 @@ Use `docs/dynamic_demand_model_example.yaml` as the standalone YAML template.
 It includes both supported electrification forms and keeps unresolved inputs as
 `TODO_SOURCE` until a data source or explicit scenario assumption is selected.
 
-The model uses:
+The default dynamic mode (`mode` omitted, or `mode: total`) uses the total-demand
+formula:
 
 $$
 D_t = D_0 \times \frac{e_t}{e_0} \times
@@ -106,13 +107,50 @@ $$
 where `D_0` is read from the workbook. The reference table is expected to provide
 country code in column A, year in column B, total electricity demand in column C,
 and unit in column D. Units are converted to TWh as follows: MWh / 1,000,000;
-GWh / 1,000; TWh unchanged. For example, SRB's 2023 value of 30,021 GWh becomes
+GWh / 1,000; TWh unchanged. For example, a test value of 30,021 GWh becomes
 30.021 TWh.
+
+The optional `mode: two_stage_reform` represents the subsidy-removal transition
+as a one-time segmented price shock, then switches to a homogeneous post-reform
+market. Use the canonical keys `reform`, `shiftable_share`, `price_index`,
+`price_elasticity`, `post_reform_price`, and `post_reform_price_elasticity`.
+
+Stage 1, normally in `reform_year` 2027:
+
+$$
+D_{reform} = D_{residual,0} + D_{shiftable,0} \times
+\left(\frac{P_{reform}}{P_0}\right)^{C_{reform}}
+$$
+
+Stage 2, for post-reform demand:
+
+$$
+D_t = D_{reform} \times \frac{e_t}{e_{reform}} \times
+\left(\frac{Y_t}{Y_{reform}}\right)^B \times
+\left(\frac{P_t}{P_{reform}}\right)^{C_t}
+$$
+
+`shiftable_share` is the preferred way to define the segmented reform shock:
+`D_shiftable,0 = D_0 * shiftable_share`, and
+`D_residual,0 = D_0 - D_shiftable,0`, where `D_0` is read from the workbook.
+The segmentation is used only in Stage 1; after `reform_year`,
+`post_reform_price` is interpreted as the homogeneous post-reform electricity
+price index. Years before `reform_year` are held at the workbook base demand
+because no pre-reform dynamic growth equation is defined in this mode. For
+example, with `base_year: 2023` and `reform_year: 2027`, requested years 2025
+and 2026 return the workbook base demand.
+
+Post-reform price elasticity can be fixed (`post_reform_price_elasticity.value`)
+or year-indexed (`post_reform_price_elasticity.values`). A scenario with
+decreasing price sensitivity over time should move from a more negative value
+toward `-0.2`, for example from `-0.6` to `-0.2`.
 
 Elasticity constraints are enforced when the model is loaded:
 
 - income elasticity `B`: `income_elasticity >= 1.0`
-- price elasticity `C`: `-0.8 <= price_elasticity <= -0.2`
+- price elasticity `C`: total-demand `price_elasticity`, reform
+  `reform.price_elasticity`, and post-reform `C_t` must all satisfy
+  `-0.8 <= C <= -0.2`
 
 Electrification supports two calculated forms. `linear_time` evaluates
 `e_t = A + slope * (year - base_year)`. `linear_income` defaults to
