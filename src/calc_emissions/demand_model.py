@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 
 TODO_SOURCE = "TODO_SOURCE"
+PRICE_ELASTICITY_MIN = -0.8
+PRICE_ELASTICITY_MAX = -0.2
 
 
 def build_dynamic_demand_series(
@@ -22,8 +24,29 @@ def build_dynamic_demand_series(
     if not isinstance(cfg, Mapping):
         raise TypeError("dynamic_model must be a mapping.")
 
+    mode = str(cfg.get("mode", "total")).strip().lower()
+    if mode in {"total", "total_demand", "single_stage"}:
+        return _build_total_dynamic_demand_series(cfg, years, config_path=config_path)
+    if mode == "two_stage_reform":
+        return _build_two_stage_reform_demand_series(cfg, years, config_path=config_path)
+    raise ValueError("dynamic_model.mode must be 'total' or 'two_stage_reform'.")
+
+
+def _build_total_dynamic_demand_series(
+    cfg: Mapping[str, object],
+    years: Sequence[int],
+    *,
+    config_path: Path,
+) -> pd.Series:
+    """Return demand using the original total-demand dynamic formula."""
+
     base_cfg = _required_mapping(cfg, "base_demand")
-    base_year = int(cfg.get("base_year", base_cfg.get("year")))
+    base_year = int(
+        _float_value(
+            cfg.get("base_year", base_cfg.get("year")),
+            "dynamic_model.base_year",
+        )
+    )
     requested_years = [int(year) for year in years]
     model_years = sorted(set(requested_years + [base_year]))
 
@@ -74,15 +97,256 @@ def build_dynamic_demand_series(
     return demand.reindex(requested_years).rename("demand_twh")
 
 
+def _build_two_stage_reform_demand_series(
+    cfg: Mapping[str, object],
+    years: Sequence[int],
+    *,
+    config_path: Path,
+) -> pd.Series:
+    """Return demand using a one-time reform shock plus post-reform dynamics."""
+
+    base_cfg = _required_mapping(cfg, "base_demand")
+    base_year = int(
+        _float_value(
+            cfg.get("base_year", base_cfg.get("year")),
+            "dynamic_model.base_year",
+        )
+    )
+    reform_year = int(_float_value(cfg.get("reform_year"), "dynamic_model.reform_year"))
+    requested_years = [int(year) for year in years]
+    model_years = sorted(set(requested_years + [base_year, reform_year]))
+
+    base_demand_twh = load_base_electricity_demand_twh(base_cfg, config_path=config_path)
+    reform_cfg = _required_mapping(
+        cfg,
+        "reform",
+        aliases=("subsidy_reform", "subsidy_removal"),
+    )
+    residual_twh, shiftable_twh = _resolve_reform_segments(
+        reform_cfg,
+        base_demand_twh=base_demand_twh,
+        base_year=base_year,
+        config_path=config_path,
+    )
+    reform_price_index = _positive_float(
+        _required_scalar_from_cfg(
+            reform_cfg,
+            ("price_index", "reform_price_index", "regulated_price_index"),
+            "dynamic_model.reform.price_index",
+            config_path=config_path,
+            year=reform_year,
+        ),
+        "dynamic_model.reform.price_index",
+    )
+    reform_price_elasticity = _float_value(
+        reform_cfg.get("price_elasticity", reform_cfg.get("C_reform")),
+        "dynamic_model.reform.price_elasticity",
+    )
+    _validate_price_elasticity(
+        reform_price_elasticity,
+        "dynamic_model.reform.price_elasticity",
+    )
+
+    income_elasticity = _float_value(
+        cfg.get("income_elasticity"),
+        "dynamic_model.income_elasticity",
+    )
+    _validate_income_elasticity(
+        income_elasticity,
+        "dynamic_model.income_elasticity",
+    )
+    post_reform_price_elasticity = _load_price_elasticity_series(
+        cfg,
+        model_years,
+        config_path=config_path,
+    )
+
+    income = _load_driver_series(
+        _required_mapping(cfg, "income", aliases=("gdp", "income_path")),
+        model_years,
+        config_path=config_path,
+        label="income",
+    )
+    price = _load_driver_series(
+        _required_mapping(
+            cfg,
+            "post_reform_price",
+            aliases=("price", "electricity_price", "price_path"),
+        ),
+        model_years,
+        config_path=config_path,
+        label="post_reform_price",
+    )
+    electrification = _build_electrification_series(
+        _required_mapping(cfg, "electrification"),
+        model_years,
+        base_year=base_year,
+        income=income,
+    )
+
+    demand_reform = residual_twh + shiftable_twh * (
+        reform_price_index**reform_price_elasticity
+    )
+    income_reform = _positive_lookup(income, reform_year, "income reform")
+    price_reform = _positive_lookup(price, reform_year, "price reform")
+    electrification_reform = _positive_lookup(
+        electrification,
+        reform_year,
+        "electrification reform",
+    )
+
+    demand = (
+        float(demand_reform)
+        * (electrification / electrification_reform)
+        * np.power(income / income_reform, income_elasticity)
+        * np.power(price / price_reform, post_reform_price_elasticity)
+    )
+    # Stage 2 begins at reform_year. Earlier requested years are intentionally
+    # held at workbook base demand; no pre-reform growth equation is defined.
+    demand.loc[demand.index < reform_year] = float(base_demand_twh)
+    return demand.reindex(requested_years).rename("demand_twh")
+
+
 def validate_elasticities(income_elasticity: float, price_elasticity: float) -> None:
     """Validate elasticity constraints used by the dynamic demand model."""
 
-    if income_elasticity < 1.0:
-        raise ValueError("dynamic_model.income_elasticity must be >= 1.0.")
-    if not -0.8 <= price_elasticity <= -0.2:
+    _validate_income_elasticity(income_elasticity, "dynamic_model.income_elasticity")
+    _validate_price_elasticity(price_elasticity, "dynamic_model.price_elasticity")
+
+
+def _validate_income_elasticity(value: float, label: str) -> None:
+    if value < 1.0:
+        raise ValueError(f"{label} must be >= 1.0.")
+
+
+def _validate_price_elasticity(value: float, label: str) -> None:
+    if not PRICE_ELASTICITY_MIN <= value <= PRICE_ELASTICITY_MAX:
         raise ValueError(
-            "dynamic_model.price_elasticity must be between -0.8 and -0.2 inclusive."
+            f"{label} must be between {PRICE_ELASTICITY_MIN} and "
+            f"{PRICE_ELASTICITY_MAX} inclusive."
         )
+
+
+def _validate_price_elasticity_series(series: pd.Series, label: str) -> None:
+    bad = (series < PRICE_ELASTICITY_MIN) | (series > PRICE_ELASTICITY_MAX)
+    if bad.any():
+        bad_years = [int(year) for year in series.index[bad]]
+        raise ValueError(
+            f"{label} must be between {PRICE_ELASTICITY_MIN} and "
+            f"{PRICE_ELASTICITY_MAX} inclusive for all years. "
+            f"Invalid years: {bad_years}."
+        )
+
+
+def _load_price_elasticity_series(
+    cfg: Mapping[str, object],
+    years: Sequence[int],
+    *,
+    config_path: Path,
+) -> pd.Series:
+    key, value = _first_present(
+        cfg,
+        ("post_reform_price_elasticity", "price_elasticity", "C_t"),
+    )
+    if key is None:
+        raise ValueError(
+            "dynamic_model must define post_reform_price_elasticity or price_elasticity."
+        )
+
+    if isinstance(value, Mapping):
+        if "value" in value:
+            scalar = _float_value(value.get("value"), f"dynamic_model.{key}.value")
+            series = pd.Series(
+                scalar,
+                index=pd.Index([int(year) for year in years]),
+                dtype=float,
+                name="price_elasticity",
+            )
+        elif "values" in value:
+            series = _values_to_series(value["values"], years, str(key))
+        elif "source" in value:
+            series = _load_driver_series(
+                value,
+                years,
+                config_path=config_path,
+                label=str(key),
+            )
+        elif _looks_like_year_mapping(value):
+            series = _values_to_series(value, years, str(key))
+        else:
+            raise ValueError(
+                f"dynamic_model.{key} must be a scalar, a year-indexed mapping, "
+                "or a mapping with value, values, or source."
+            )
+    else:
+        scalar = _float_value(value, f"dynamic_model.{key}")
+        series = pd.Series(
+            scalar,
+            index=pd.Index([int(year) for year in years]),
+            dtype=float,
+            name="price_elasticity",
+        )
+
+    series = series.astype(float).rename("price_elasticity")
+    _validate_price_elasticity_series(series, f"dynamic_model.{key}")
+    return series
+
+
+def _resolve_reform_segments(
+    cfg: Mapping[str, object],
+    *,
+    base_demand_twh: float,
+    base_year: int,
+    config_path: Path,
+) -> tuple[float, float]:
+    residual_twh = _optional_scalar_from_cfg(
+        cfg,
+        ("residual_demand_twh", "residual_demand", "D_residual_0"),
+        "dynamic_model.reform.residual_demand_twh",
+        config_path=config_path,
+        year=base_year,
+    )
+    shiftable_twh = _optional_scalar_from_cfg(
+        cfg,
+        ("shiftable_demand_twh", "shiftable_demand", "D_shiftable_0"),
+        "dynamic_model.reform.shiftable_demand_twh",
+        config_path=config_path,
+        year=base_year,
+    )
+    shiftable_share = _optional_scalar_from_cfg(
+        cfg,
+        ("shiftable_share", "shiftable_fraction"),
+        "dynamic_model.reform.shiftable_share",
+        config_path=config_path,
+        year=base_year,
+    )
+
+    if shiftable_twh is None and shiftable_share is not None:
+        if not 0.0 <= shiftable_share <= 1.0:
+            raise ValueError("dynamic_model.reform.shiftable_share must be within [0, 1].")
+        shiftable_twh = float(base_demand_twh) * shiftable_share
+    if residual_twh is None and shiftable_twh is not None:
+        residual_twh = float(base_demand_twh) - shiftable_twh
+    if shiftable_twh is None and residual_twh is not None:
+        shiftable_twh = float(base_demand_twh) - residual_twh
+    if residual_twh is None or shiftable_twh is None:
+        raise ValueError(
+            "dynamic_model.reform must define residual_demand_twh and "
+            "shiftable_demand_twh, or one component plus shiftable_share."
+        )
+    if residual_twh < 0.0:
+        raise ValueError("dynamic_model.reform.residual_demand_twh must be non-negative.")
+    if shiftable_twh < 0.0:
+        raise ValueError("dynamic_model.reform.shiftable_demand_twh must be non-negative.")
+
+    expected_total = residual_twh + shiftable_twh
+    tolerance = 1e-6 * max(1.0, abs(float(base_demand_twh)))
+    if abs(expected_total - float(base_demand_twh)) > tolerance:
+        raise ValueError(
+            "dynamic_model.reform residual and shiftable demand must sum to "
+            "the workbook base electricity demand."
+        )
+    return float(residual_twh), float(shiftable_twh)
 
 
 def load_base_electricity_demand_twh(
@@ -225,6 +489,129 @@ def _load_driver_series(
     return _values_to_series(mapping, years, label)
 
 
+def _required_scalar_from_cfg(
+    cfg: Mapping[str, object],
+    aliases: Sequence[str],
+    label: str,
+    *,
+    config_path: Path,
+    year: int | None,
+) -> float:
+    value = _optional_scalar_from_cfg(
+        cfg,
+        aliases,
+        label,
+        config_path=config_path,
+        year=year,
+    )
+    if value is None:
+        alias_text = ", ".join(aliases)
+        raise ValueError(f"{label} must define one of: {alias_text}.")
+    return value
+
+
+def _optional_scalar_from_cfg(
+    cfg: Mapping[str, object],
+    aliases: Sequence[str],
+    label: str,
+    *,
+    config_path: Path,
+    year: int | None,
+) -> float | None:
+    for alias in aliases:
+        if alias in cfg:
+            return _scalar_input_value(
+                cfg[alias],
+                label,
+                config_path=config_path,
+                year=year,
+            )
+    return None
+
+
+def _scalar_input_value(
+    value: object,
+    label: str,
+    *,
+    config_path: Path,
+    year: int | None,
+) -> float:
+    if isinstance(value, Mapping):
+        if "value" in value:
+            return _float_value(value.get("value"), f"{label}.value")
+        if "values" in value:
+            if year is None:
+                raise ValueError(f"{label}.values requires a year.")
+            series_label = label.removeprefix("dynamic_model.")
+            series = _values_to_series(value["values"], [year], series_label)
+            return float(series.loc[int(year)])
+        if "source" in value:
+            return _load_scalar_source(
+                value,
+                label,
+                config_path=config_path,
+                year=year,
+            )
+        raise ValueError(f"{label} must be a scalar or a mapping with value, values, or source.")
+    return _float_value(value, label)
+
+
+def _load_scalar_source(
+    cfg: Mapping[str, object],
+    label: str,
+    *,
+    config_path: Path,
+    year: int | None,
+) -> float:
+    path = _resolve_path(_required_text(cfg, "source", f"{label}.source"), config_path)
+    value_column = cfg.get("value_column", cfg.get("column"))
+    if value_column is None:
+        raise ValueError(f"{label}.value_column must be set for source data.")
+    _reject_todo(value_column, f"{label}.value_column")
+    value_column = str(value_column)
+    if path.suffix.lower() in {".xlsx", ".xls"}:
+        frame = pd.read_excel(path, sheet_name=cfg.get("sheet", 0))
+    else:
+        frame = pd.read_csv(path)
+
+    filters = cfg.get("filters")
+    if isinstance(filters, Mapping):
+        for column, expected in filters.items():
+            column_name = str(column)
+            if column_name not in frame.columns:
+                raise ValueError(f"{label}.source is missing filter column '{column_name}'.")
+            _reject_todo(expected, f"{label}.filters.{column_name}")
+            frame = frame[
+                frame[column_name].astype(str).str.strip().str.casefold()
+                == str(expected).strip().casefold()
+            ]
+
+    country_column = cfg.get("country_column")
+    country_code = cfg.get("country_code")
+    if country_column and country_code:
+        frame = frame[
+            frame[str(country_column)].astype(str).str.strip().str.upper()
+            == str(country_code).strip().upper()
+        ]
+
+    source_year = cfg.get("year", year)
+    if source_year is not None:
+        year_column = str(cfg.get("year_column", "year"))
+        if year_column not in frame.columns:
+            raise ValueError(f"{label}.source is missing year column '{year_column}'.")
+        source_year_int = int(_float_value(source_year, f"{label}.year"))
+        years = pd.to_numeric(frame[year_column], errors="coerce")
+        frame = frame[years == source_year_int]
+
+    if str(value_column) not in frame.columns:
+        raise ValueError(f"{label}.source is missing value column '{value_column}'.")
+    if frame.empty:
+        raise ValueError(f"{label}.source has no matching rows.")
+    if len(frame) > 1:
+        raise ValueError(f"{label}.source matched multiple rows; add filters.")
+    return _float_value(frame.iloc[0][str(value_column)], label)
+
+
 def _build_electrification_series(
     cfg: Mapping[str, object],
     years: Sequence[int],
@@ -261,7 +648,9 @@ def _build_electrification_series(
             )
             values = intercept + slope * income_aligned.to_numpy(dtype=float)
     else:
-        raise ValueError("dynamic_model.electrification.form must be linear_time or linear_income.")
+        raise ValueError(
+            "dynamic_model.electrification.form must be linear_time or linear_income."
+        )
 
     series = pd.Series(values, index=index, dtype=float, name="electrification_share")
     bounds_mode = str(cfg.get("bounds", "validate")).strip().lower()
@@ -348,6 +737,33 @@ def _float_value(value: object, label: str) -> float:
     if not np.isfinite(result):
         raise ValueError(f"{label} must be finite.")
     return result
+
+
+def _positive_float(value: float, label: str) -> float:
+    if value <= 0.0:
+        raise ValueError(f"{label} must be greater than zero.")
+    return value
+
+
+def _first_present(
+    cfg: Mapping[str, object],
+    aliases: Sequence[str],
+) -> tuple[str | None, object | None]:
+    for alias in aliases:
+        if alias in cfg:
+            return alias, cfg[alias]
+    return None, None
+
+
+def _looks_like_year_mapping(value: Mapping[object, object]) -> bool:
+    if not value:
+        return False
+    for key in value:
+        try:
+            int(key)
+        except (TypeError, ValueError):
+            return False
+    return True
 
 
 def _positive_lookup(series: pd.Series, year: int, label: str) -> float:

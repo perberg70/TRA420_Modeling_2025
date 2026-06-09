@@ -12,10 +12,11 @@ calc_emissions:
     dynamic_linear_time:
       description: Dynamic electricity demand using time-based electrification.
       dynamic_model:
+        mode: total
         base_year: 2023
         base_demand:
           source: data/calc_emissions/Electricity_OECD.xlsx
-          country_code: SRB
+          country_code: TODO_SOURCE
           demand_column: Total electricity demand
           year: 2023
         income:
@@ -34,10 +35,11 @@ calc_emissions:
     dynamic_linear_income:
       description: Dynamic electricity demand using income-based electrification.
       dynamic_model:
+        mode: total
         base_year: 2023
         base_demand:
           source: data/calc_emissions/Electricity_OECD.xlsx
-          country_code: SRB
+          country_code: TODO_SOURCE
           demand_column: Total electricity demand
           year: 2023
         income:
@@ -52,3 +54,41 @@ calc_emissions:
           slope: TODO_SOURCE
         income_elasticity: TODO_SOURCE  # B, must be >= 1.0
         price_elasticity: TODO_SOURCE  # C, must satisfy -0.8 <= C <= -0.2
+
+    dynamic_two_stage_reform:
+      description: Dynamic demand with a one-time subsidy-removal shock in 2027.
+      dynamic_model:
+        mode: two_stage_reform
+        base_year: 2023
+        reform_year: 2027
+        base_demand:
+          source: data/calc_emissions/Electricity_OECD.xlsx
+          country_code: TODO_SOURCE
+          demand_column: Total electricity demand
+          year: 2023
+        reform:
+          # D_shiftable_0 = workbook base demand * shiftable_share.
+          # D_residual_0 = workbook base demand - D_shiftable_0.
+          price_index: TODO_SOURCE  # P_reform / P_0
+          price_elasticity: TODO_SOURCE  # C_reform, -0.8 <= C <= -0.2
+          shiftable_share: TODO_SOURCE
+        income:
+          source: TODO_SOURCE
+          value_column: TODO_SOURCE
+        post_reform_price:
+          # Homogeneous post-reform electricity price path. Set the reform-year
+          # value as P_reform, or use an index with reform_year equal to 1.0.
+          source: TODO_SOURCE
+          value_column: TODO_SOURCE
+        electrification:
+          form: linear_income
+          base_share: TODO_SOURCE
+          slope: TODO_SOURCE
+        income_elasticity: TODO_SOURCE  # B, must be >= 1.0
+        post_reform_price_elasticity:
+          value: TODO_SOURCE  # Fixed C_t, -0.8 <= C_t <= -0.2
+          # Or use year-indexed C_t values with decreasing price sensitivity:
+          # values:
+          #   2027: -0.6
+          #   2035: -0.4
+          #   2050: -0.2
