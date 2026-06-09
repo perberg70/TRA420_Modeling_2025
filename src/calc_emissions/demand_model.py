@@ -228,6 +228,14 @@ def _validate_price_elasticity(value: float, label: str) -> None:
 
 
 def _validate_price_elasticity_series(series: pd.Series, label: str) -> None:
+    non_finite = ~np.isfinite(series.astype(float))
+    if non_finite.any():
+        bad_years = [int(year) for year in series.index[non_finite]]
+        raise ValueError(
+            f"{label} must be finite for all years. "
+            f"Invalid years: {bad_years}."
+        )
+
     bad = (series < PRICE_ELASTICITY_MIN) | (series > PRICE_ELASTICITY_MAX)
     if bad.any():
         bad_years = [int(year) for year in series.index[bad]]
@@ -236,7 +244,6 @@ def _validate_price_elasticity_series(series: pd.Series, label: str) -> None:
             f"{PRICE_ELASTICITY_MAX} inclusive for all years. "
             f"Invalid years: {bad_years}."
         )
-
 
 def _load_price_elasticity_series(
     cfg: Mapping[str, object],
