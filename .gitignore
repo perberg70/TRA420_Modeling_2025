@@ -10,3 +10,4 @@ src/tra420_modeling.egg-info/SOURCES.txt
 src/tra420_modeling.egg-info/top_level.txt
 config.yaml
 .vscode/launch.json
+.pytest_tmp/

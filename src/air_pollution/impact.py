@@ -16,9 +16,10 @@ percentage change in mortality for each country and year.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -67,6 +68,36 @@ class PollutantImpact:
     electricity_share: pd.Series | None = None
 
 
+@dataclass(frozen=True)
+class HealthCostAssumptions:
+    """Unit-cost assumptions for monetising mortality and morbidity impacts.
+
+    ``per_death`` values capture direct costs attached to each death (end-of-life
+    treatment, lost earnings). ``per_case`` values are applied to non-fatal
+    illness episodes via ``morbidity_cases_per_death``.
+    """
+
+    healthcare_cost_usd_per_death: float = 0.0
+    income_loss_usd_per_death: float = 0.0
+    morbidity_cases_per_death: float = 0.0
+    healthcare_cost_usd_per_case: float = 0.0
+    income_loss_usd_per_case: float = 0.0
+
+    @property
+    def healthcare_cost_per_death(self) -> float:
+        return (
+            self.healthcare_cost_usd_per_death
+            + self.morbidity_cases_per_death * self.healthcare_cost_usd_per_case
+        )
+
+    @property
+    def income_loss_per_death(self) -> float:
+        return (
+            self.income_loss_usd_per_death
+            + self.morbidity_cases_per_death * self.income_loss_usd_per_case
+        )
+
+
 @dataclass
 class AirPollutionResult:
     """Scenario-level health impact results."""
@@ -74,6 +105,9 @@ class AirPollutionResult:
     scenario: str
     pollutant_results: dict[str, PollutantImpact]
     total_mortality_summary: pd.DataFrame | None = None
+    indoor_impacts: pd.DataFrame | None = None
+    indoor_summary: pd.DataFrame | None = None
+    health_cost_summary: pd.DataFrame | None = None
 
 
 def run_from_config(
@@ -170,6 +204,19 @@ def run_from_config(
         module_baseline_cfg.get("weights") if isinstance(module_baseline_cfg, Mapping) else None
     )
     electricity_share_cfg = module_cfg.get("electricity_share", 0.07)
+    health_costs = _parse_health_costs(module_cfg.get("health_costs"))
+    indoor_cfg = module_cfg.get("indoor")
+    indoor_stats: pd.DataFrame | None = None
+    if isinstance(indoor_cfg, Mapping) and indoor_cfg.get("stats_file"):
+        indoor_stats = _load_indoor_stats(
+            config_root,
+            str(indoor_cfg["stats_file"]),
+            countries_filter,
+        )
+    elif indoor_cfg not in (None, {}):
+        if not isinstance(indoor_cfg, Mapping):
+            raise TypeError("'air_pollution.indoor' must be a mapping.")
+        raise ValueError("'air_pollution.indoor' requires a 'stats_file' entry.")
 
     if emission_results is None:
         emission_results = run_emissions(
@@ -263,6 +310,7 @@ def run_from_config(
                     weighted_percent_change,
                     baseline_deaths,
                     value_of_statistical_life=module_vsl_value,
+                    health_costs=health_costs,
                 )
                 if deaths_summary.empty:
                     deaths_summary = None
@@ -289,7 +337,22 @@ def run_from_config(
             if deaths_summary is not None:
                 _write_mortality_summary(output_dir, scenario_name, pollutant, deaths_summary)
 
-        if pollutant_results:
+        indoor_impacts: pd.DataFrame | None = None
+        indoor_summary: pd.DataFrame | None = None
+        if indoor_stats is not None and not indoor_stats.empty:
+            indoor_impacts, indoor_summary = _build_indoor_results(
+                scenario_result,
+                baseline,
+                indoor_stats,
+                value_of_statistical_life=module_vsl_value,
+                health_costs=health_costs,
+            )
+            if indoor_impacts is not None:
+                _write_indoor_health_impact(output_dir, scenario_name, indoor_impacts)
+            if indoor_summary is not None:
+                _write_indoor_mortality_summary(output_dir, scenario_name, indoor_summary)
+
+        if pollutant_results or indoor_summary is not None:
             baseline_for_total = module_baseline_deaths
             if baseline_for_total is None:
                 derived = sum(
@@ -299,19 +362,32 @@ def run_from_config(
                     baseline_for_total = float(derived)
                     module_baseline_deaths = baseline_for_total
             total_summary = None
-            if baseline_for_total is not None:
+            if pollutant_results and baseline_for_total is not None:
                 total_summary = _build_total_mortality_summary(
                     pollutant_results,
                     baseline_for_total,
                     module_weights_cfg,
                     module_vsl_value,
+                    health_costs=health_costs,
                 )
                 if total_summary is not None:
+                    total_summary = _fold_indoor_into_total(total_summary, indoor_summary)
                     _write_total_mortality_summary(output_dir, scenario_name, total_summary)
+            health_cost_summary = _build_health_cost_summary(
+                total_summary,
+                indoor_summary,
+                value_of_statistical_life=module_vsl_value,
+                health_costs=health_costs,
+            )
+            if health_cost_summary is not None:
+                _write_health_cost_summary(output_dir, scenario_name, health_cost_summary)
             results[scenario_name] = AirPollutionResult(
                 scenario=scenario_name,
                 pollutant_results=pollutant_results,
                 total_mortality_summary=total_summary,
+                indoor_impacts=indoor_impacts,
+                indoor_summary=indoor_summary,
+                health_cost_summary=health_cost_summary,
             )
 
     return results
@@ -396,7 +472,7 @@ def _load_concentrations(
 
     if chosen_col is None:
         raise ValueError(
-            f"No usable concentration column found in '{path}'. " f"Available: {sorted(available)}"
+            f"No usable concentration column found in '{path}'. Available: {sorted(available)}"
         )
 
     series = df.set_index("country")[chosen_col].astype(float)
@@ -691,15 +767,12 @@ def _build_death_summary(
     baseline_deaths_per_year: float,
     *,
     value_of_statistical_life: float | None = None,
+    health_costs: HealthCostAssumptions | None = None,
 ) -> pd.DataFrame:
     if percent_change.empty:
         return pd.DataFrame()
 
-    df = (
-        percent_change.sort_index()
-        .astype(float, copy=True)
-        .to_frame(name="percent_change_mortality")
-    )
+    df = percent_change.sort_index().astype(float).copy().to_frame(name="percent_change_mortality")
     df["baseline_deaths_per_year"] = baseline_deaths_per_year
     df["delta_deaths_per_year"] = df["baseline_deaths_per_year"] * df["percent_change_mortality"]
     df["new_deaths_per_year"] = df["baseline_deaths_per_year"] + df["delta_deaths_per_year"]
@@ -709,8 +782,68 @@ def _build_death_summary(
         df["baseline_value_usd"] = df["baseline_deaths_per_year"] * vsl
         df["delta_value_usd"] = df["delta_deaths_per_year"] * vsl
         df["new_value_usd"] = df["new_deaths_per_year"] * vsl
+    _append_health_cost_columns(
+        df,
+        "delta_deaths_per_year",
+        value_of_statistical_life=value_of_statistical_life,
+        health_costs=health_costs,
+    )
     df.reset_index(inplace=True)
     return df
+
+
+def _append_health_cost_columns(
+    df: pd.DataFrame,
+    delta_deaths_column: str,
+    *,
+    value_of_statistical_life: float | None,
+    health_costs: HealthCostAssumptions | None,
+) -> None:
+    """Add healthcare-cost, income-loss, and total-cost columns in place."""
+
+    if health_costs is None:
+        return
+    deaths = df[delta_deaths_column].astype(float)
+    df["delta_healthcare_cost_usd"] = deaths * health_costs.healthcare_cost_per_death
+    df["delta_income_loss_usd"] = deaths * health_costs.income_loss_per_death
+    total = df["delta_healthcare_cost_usd"] + df["delta_income_loss_usd"]
+    if value_of_statistical_life is not None:
+        total = total + deaths * float(value_of_statistical_life)
+    df["delta_total_cost_usd"] = total
+
+
+def _parse_health_costs(cfg: object) -> HealthCostAssumptions | None:
+    """Parse the optional ``air_pollution.health_costs`` configuration block."""
+
+    if not cfg:
+        return None
+    if not isinstance(cfg, Mapping):
+        raise TypeError("'air_pollution.health_costs' must be a mapping.")
+
+    known_fields = {
+        "healthcare_cost_usd_per_death",
+        "income_loss_usd_per_death",
+        "morbidity_cases_per_death",
+        "healthcare_cost_usd_per_case",
+        "income_loss_usd_per_case",
+    }
+    unknown = set(map(str, cfg)) - known_fields
+    if unknown:
+        raise ValueError(
+            f"Unknown 'air_pollution.health_costs' keys: {sorted(unknown)}. "
+            f"Supported keys: {sorted(known_fields)}."
+        )
+
+    values: dict[str, float] = {}
+    for field in known_fields:
+        raw = cfg.get(field)
+        if raw is None:
+            continue
+        value = float(raw)
+        if value < 0.0:
+            raise ValueError(f"'air_pollution.health_costs.{field}' must be non-negative.")
+        values[field] = value
+    return HealthCostAssumptions(**values)
 
 
 def _build_total_mortality_summary(
@@ -718,6 +851,8 @@ def _build_total_mortality_summary(
     baseline_deaths_per_year: float | None,
     weights_cfg: Mapping[str, object] | str | None,
     value_of_statistical_life: float | None,
+    *,
+    health_costs: HealthCostAssumptions | None = None,
 ) -> pd.DataFrame | None:
     if baseline_deaths_per_year is None:
         return None
@@ -778,7 +913,269 @@ def _build_total_mortality_summary(
     if not rows:
         return None
 
-    return pd.DataFrame(rows).sort_values("year").reset_index(drop=True)
+    summary = pd.DataFrame(rows).sort_values("year").reset_index(drop=True)
+    _append_health_cost_columns(
+        summary,
+        "delta_deaths_per_year",
+        value_of_statistical_life=value_of_statistical_life,
+        health_costs=health_costs,
+    )
+    return summary
+
+
+def _normalize_country_name(name: object) -> str:
+    return re.sub(r"[\s_\-]+", " ", str(name).strip()).casefold()
+
+
+def _match_country(target: str, candidates: Iterable[str]) -> str | None:
+    """Match country labels that differ in separators or length (e.g. 'Bosnia')."""
+
+    normalized = {_normalize_country_name(c): c for c in candidates}
+    target_norm = _normalize_country_name(target)
+    if target_norm in normalized:
+        return normalized[target_norm]
+    for candidate_norm, original in normalized.items():
+        if candidate_norm.startswith(target_norm) or target_norm.startswith(candidate_norm):
+            return original
+    return None
+
+
+def _load_indoor_stats(
+    config_dir: Path,
+    stats_path: str,
+    countries_filter: Iterable[str] | None,
+) -> pd.DataFrame:
+    """Load per-country indoor (household) air pollution baselines."""
+
+    path = Path(stats_path)
+    if not path.is_absolute():
+        path = (config_dir / path).resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"Indoor air-pollution statistics file not found: '{path}'.")
+
+    df = pd.read_csv(path)
+    required = {"country", "baseline_deaths_per_year"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Indoor statistics file '{path}' is missing columns: {sorted(missing)}.")
+
+    numeric_columns = [
+        col for col in ("baseline_deaths_per_year", "base_electrification") if col in df.columns
+    ]
+    for column in numeric_columns:
+        todo_mask = df[column].astype(str).str.strip().str.upper() == "TODO_SOURCE"
+        if todo_mask.any():
+            todo_countries = sorted(df.loc[todo_mask, "country"].astype(str))
+            raise ValueError(
+                f"Indoor statistics file '{path}' contains TODO_SOURCE values in "
+                f"'{column}' for {todo_countries}; provide data before enabling "
+                "the indoor module."
+            )
+        df[column] = df[column].astype(float)
+
+    df = df.set_index("country")
+    if countries_filter:
+        matched = [
+            country
+            for country in df.index
+            if any(_match_country(country, [f]) for f in countries_filter)
+        ]
+        df = df.loc[matched]
+    return df
+
+
+def _resolve_country_electrification(
+    result: EmissionScenarioResult | None,
+    country: str,
+    years: Sequence[int],
+) -> pd.Series | None:
+    """Return the scenario electrification path for a country, if available."""
+
+    if result is None:
+        return None
+    series: pd.Series | None = None
+    by_country = getattr(result, "electrification_by_country", None)
+    if by_country:
+        key = _match_country(country, by_country.keys())
+        if key is not None:
+            series = by_country[key]
+    if series is None:
+        series = getattr(result, "electrification", None)
+    if series is None:
+        return None
+
+    series = series.astype(float).sort_index()
+    index = pd.Index(sorted({int(year) for year in years}))
+    series = series.reindex(index.union(series.index))
+    series = series.interpolate(method="index").ffill().bfill()
+    return series.reindex(index)
+
+
+def _build_indoor_results(
+    scenario_result: EmissionScenarioResult,
+    baseline_result: EmissionScenarioResult | None,
+    indoor_stats: pd.DataFrame,
+    *,
+    value_of_statistical_life: float | None,
+    health_costs: HealthCostAssumptions | None,
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    """Return (per-country impacts, aggregated summary) for indoor pollution.
+
+    Indoor (household) exposure is assumed proportional to the non-electrified
+    share of households: deaths_t = deaths_0 * (1 - e_t) / (1 - e_0). Static
+    demand cases without an electrification path keep constant indoor deaths.
+    """
+
+    years = [int(year) for year in scenario_result.years]
+    if not years:
+        return None, None
+
+    records: list[dict[str, object]] = []
+    any_dynamic = False
+    for country, row in indoor_stats.iterrows():
+        baseline_deaths = float(row["baseline_deaths_per_year"])
+        scenario_elec = _resolve_country_electrification(scenario_result, str(country), years)
+        baseline_elec = _resolve_country_electrification(baseline_result, str(country), years)
+        base_share = row.get("base_electrification")
+        base_share = float(base_share) if pd.notna(base_share) else None
+
+        scenario_deaths = _indoor_death_series(baseline_deaths, scenario_elec, base_share, years)
+        baseline_series = _indoor_death_series(baseline_deaths, baseline_elec, base_share, years)
+        if scenario_elec is not None or baseline_elec is not None:
+            any_dynamic = True
+
+        for year in years:
+            entry: dict[str, object] = {
+                "country": country,
+                "year": int(year),
+                "electrification_share": (
+                    float(scenario_elec.loc[year]) if scenario_elec is not None else np.nan
+                ),
+                "baseline_indoor_deaths_per_year": float(baseline_series.loc[year]),
+                "indoor_deaths_per_year": float(scenario_deaths.loc[year]),
+            }
+            entry["delta_indoor_deaths_per_year"] = (
+                entry["indoor_deaths_per_year"] - entry["baseline_indoor_deaths_per_year"]
+            )
+            records.append(entry)
+
+    if not records or not any_dynamic:
+        # Without any electrification path the indoor burden cannot respond to
+        # the scenario; skip rather than reporting all-zero deltas.
+        return None, None
+
+    impacts = pd.DataFrame.from_records(records).sort_values(["country", "year"])
+
+    summary = (
+        impacts.groupby("year")[
+            [
+                "baseline_indoor_deaths_per_year",
+                "indoor_deaths_per_year",
+                "delta_indoor_deaths_per_year",
+            ]
+        ]
+        .sum()
+        .sort_index()
+        .reset_index()
+    )
+    if value_of_statistical_life is not None:
+        vsl = float(value_of_statistical_life)
+        summary["value_of_statistical_life_usd"] = vsl
+        summary["delta_value_usd"] = summary["delta_indoor_deaths_per_year"] * vsl
+    _append_health_cost_columns(
+        summary,
+        "delta_indoor_deaths_per_year",
+        value_of_statistical_life=value_of_statistical_life,
+        health_costs=health_costs,
+    )
+    return impacts, summary
+
+
+def _indoor_death_series(
+    baseline_deaths: float,
+    electrification: pd.Series | None,
+    base_share: float | None,
+    years: Sequence[int],
+) -> pd.Series:
+    """Scale baseline indoor deaths by the non-electrified household share."""
+
+    index = pd.Index([int(year) for year in years])
+    if electrification is None:
+        return pd.Series(baseline_deaths, index=index, dtype=float)
+
+    reference = base_share
+    if reference is None:
+        reference = float(electrification.iloc[0])
+    non_electric_base = 1.0 - reference
+    if non_electric_base <= 0.0:
+        # Fully electrified reference: no indoor solid-fuel burden remains.
+        return pd.Series(0.0, index=index, dtype=float)
+    ratio = ((1.0 - electrification) / non_electric_base).clip(lower=0.0)
+    return (baseline_deaths * ratio).reindex(index).astype(float)
+
+
+def _fold_indoor_into_total(
+    total_summary: pd.DataFrame,
+    indoor_summary: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Append indoor mortality columns to the combined ambient summary."""
+
+    if indoor_summary is None or indoor_summary.empty:
+        return total_summary
+    indoor_delta = indoor_summary.set_index("year")["delta_indoor_deaths_per_year"]
+    total_summary = total_summary.copy()
+    total_summary["delta_indoor_deaths_per_year"] = (
+        total_summary["year"].map(indoor_delta).fillna(0.0)
+    )
+    total_summary["delta_deaths_total_per_year"] = (
+        total_summary["delta_deaths_per_year"] + total_summary["delta_indoor_deaths_per_year"]
+    )
+    return total_summary
+
+
+def _build_health_cost_summary(
+    total_summary: pd.DataFrame | None,
+    indoor_summary: pd.DataFrame | None,
+    *,
+    value_of_statistical_life: float | None,
+    health_costs: HealthCostAssumptions | None,
+) -> pd.DataFrame | None:
+    """Combine ambient and indoor mortality deltas into a monetised summary."""
+
+    if total_summary is None and indoor_summary is None:
+        return None
+    if value_of_statistical_life is None and health_costs is None:
+        return None
+
+    ambient = (
+        total_summary.set_index("year")["delta_deaths_per_year"]
+        if total_summary is not None
+        else pd.Series(dtype=float)
+    )
+    indoor = (
+        indoor_summary.set_index("year")["delta_indoor_deaths_per_year"]
+        if indoor_summary is not None
+        else pd.Series(dtype=float)
+    )
+    years = sorted(set(ambient.index) | set(indoor.index))
+    if not years:
+        return None
+
+    df = pd.DataFrame({"year": [int(year) for year in years]})
+    df["ambient_delta_deaths_per_year"] = df["year"].map(ambient).fillna(0.0)
+    df["indoor_delta_deaths_per_year"] = df["year"].map(indoor).fillna(0.0)
+    df["total_delta_deaths_per_year"] = (
+        df["ambient_delta_deaths_per_year"] + df["indoor_delta_deaths_per_year"]
+    )
+    if value_of_statistical_life is not None:
+        df["delta_value_usd"] = df["total_delta_deaths_per_year"] * float(value_of_statistical_life)
+    _append_health_cost_columns(
+        df,
+        "total_delta_deaths_per_year",
+        value_of_statistical_life=value_of_statistical_life,
+        health_costs=health_costs,
+    )
+    return df
 
 
 def _write_output(output_dir: Path, scenario: str, pollutant: str, impacts: pd.DataFrame) -> None:
@@ -833,4 +1230,25 @@ def _write_total_mortality_summary(output_dir: Path, scenario: str, summary: pd.
     scenario_dir = output_dir / scenario
     scenario_dir.mkdir(parents=True, exist_ok=True)
     path = scenario_dir / "total_mortality_summary.csv"
+    summary.to_csv(path, index=False)
+
+
+def _write_indoor_health_impact(output_dir: Path, scenario: str, impacts: pd.DataFrame) -> None:
+    scenario_dir = output_dir / scenario
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    path = scenario_dir / "indoor_health_impact.csv"
+    impacts.to_csv(path, index=False)
+
+
+def _write_indoor_mortality_summary(output_dir: Path, scenario: str, summary: pd.DataFrame) -> None:
+    scenario_dir = output_dir / scenario
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    path = scenario_dir / "indoor_mortality_summary.csv"
+    summary.to_csv(path, index=False)
+
+
+def _write_health_cost_summary(output_dir: Path, scenario: str, summary: pd.DataFrame) -> None:
+    scenario_dir = output_dir / scenario
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    path = scenario_dir / "health_cost_summary.csv"
     summary.to_csv(path, index=False)

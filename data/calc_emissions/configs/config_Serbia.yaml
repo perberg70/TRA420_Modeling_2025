@@ -10,17 +10,87 @@ calc_emissions:
         2027: 30.021
         2100: 30.021
     scen1_upper:
-      description: Serbia upper bound (TWh).
-      values:
-        2025: 30.021
-        2027: 26.535266
-        2100: 26.535266
+      description: >-
+        Serbia Scenario 1 Upper bound — dynamic from 2027 (subsidy-removal
+        shock, then GDP/population/electrification growth). Pre-2027 demand is
+        held at the workbook 2023 base demand. Replaces the previous static
+        value of 26.535266 TWh from 2027.
+      dynamic_model:
+        mode: two_stage_reform
+        base_year: 2023
+        reform_year: 2027
+        base_demand:
+          source: data/calc_emissions/Electricity_OECD.xlsx
+          country_code: SRB
+          demand_column: Total electricity demand
+          year: 2023
+        reform:
+          shiftable_share:
+            source: workbook
+          price_index:
+            source: workbook
+            bound: upper
+          price_elasticity: TODO_SOURCE  # C_reform, must satisfy -0.8 <= C <= -0.2
+        income:
+          source: data/calc_emissions/demand_drivers/gdp.csv
+          country_column: country_code
+          country_code: SRB
+          value_column: value
+        population:
+          source: data/calc_emissions/demand_drivers/population.csv
+          country_column: country_code
+          country_code: SRB
+          value_column: value
+        # post_reform_price omitted: held constant at the reform-year price
+        # (index 1.0) until a post-reform price projection is supplied.
+        electrification:
+          form: linear_time
+          A: TODO_SOURCE      # electrification share in base_year (within [0, 1])
+          slope: TODO_SOURCE  # annual change in electrification share
+        income_elasticity: TODO_SOURCE  # B, must be >= 1.0
+        post_reform_price_elasticity:
+          value: TODO_SOURCE  # C_t, must satisfy -0.8 <= C_t <= -0.2
     scen1_lower:
-      description: Serbia lower bound (TWh).
-      values:
-        2025: 30.021
-        2027: 27.927370
-        2100: 27.927370
+      description: >-
+        Serbia Scenario 1 Lower bound — dynamic from 2027 (subsidy-removal
+        shock, then GDP/population/electrification growth). Pre-2027 demand is
+        held at the workbook 2023 base demand. Replaces the previous static
+        value of 27.927370 TWh from 2027.
+      dynamic_model:
+        mode: two_stage_reform
+        base_year: 2023
+        reform_year: 2027
+        base_demand:
+          source: data/calc_emissions/Electricity_OECD.xlsx
+          country_code: SRB
+          demand_column: Total electricity demand
+          year: 2023
+        reform:
+          shiftable_share:
+            source: workbook
+          price_index:
+            source: workbook
+            bound: lower
+          price_elasticity: TODO_SOURCE  # C_reform, must satisfy -0.8 <= C <= -0.2
+        income:
+          source: data/calc_emissions/demand_drivers/gdp.csv
+          country_column: country_code
+          country_code: SRB
+          value_column: value
+        population:
+          source: data/calc_emissions/demand_drivers/population.csv
+          country_column: country_code
+          country_code: SRB
+          value_column: value
+        # post_reform_price omitted: held constant at the reform-year price
+        # (index 1.0) until a post-reform price projection is supplied.
+        electrification:
+          form: linear_time
+          A: TODO_SOURCE      # electrification share in base_year (within [0, 1])
+          slope: TODO_SOURCE  # annual change in electrification share
+        income_elasticity: TODO_SOURCE  # B, must be >= 1.0
+        post_reform_price_elasticity:
+          value: TODO_SOURCE  # C_t, must satisfy -0.8 <= C_t <= -0.2
     # moved custom_example from scenarios -> demand_scenarios if you want it evaluated as a demand case
     custom_example_demand:
       description: Custom demand example (TWh).

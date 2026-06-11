@@ -65,9 +65,9 @@ def _resolve_paths(
     per_country_root = Path(per_country_cfg)
     if not per_country_root.is_absolute():
         per_country_root = (ROOT / per_country_cfg).resolve()
-    per_country_root = apply_results_run_directory(
-        per_country_root, run_directory, repo_root=ROOT
-    ) / mix
+    per_country_root = (
+        apply_results_run_directory(per_country_root, run_directory, repo_root=ROOT) / mix
+    )
 
     return agg_root, per_country_root
 

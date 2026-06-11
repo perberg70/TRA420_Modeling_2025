@@ -17,7 +17,7 @@ import pandas as pd
 import yaml
 
 from .constants import BASE_DEMAND_CASE, BASE_MIX_CASE, POLLUTANTS
-from .demand_model import build_dynamic_demand_series
+from .demand_model import build_dynamic_demand_components
 
 LOGGER = logging.getLogger("calc_emissions")
 if not LOGGER.handlers:
@@ -47,6 +47,10 @@ class EmissionScenarioResult:
     technology_emissions_mt: dict[str, pd.DataFrame]
     total_emissions_mt: dict[str, pd.Series]
     delta_mtco2: pd.Series
+    # Electrification share series from the dynamic demand model (None for
+    # static demand cases). Per-country mapping is populated by aggregators.
+    electrification: pd.Series | None = None
+    electrification_by_country: dict[str, pd.Series] | None = None
 
 
 def run_from_config(
@@ -133,9 +137,7 @@ def run_from_config(
         str(module_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
     )
     delta_mode = (
-        str(delta_baseline_mode or module_cfg.get("delta_baseline_mode", "per_mix"))
-        .strip()
-        .lower()
+        str(delta_baseline_mode or module_cfg.get("delta_baseline_mode", "per_mix")).strip().lower()
         or "per_mix"
     )
     if delta_mode not in {"per_mix", "global"}:
@@ -176,7 +178,9 @@ def run_from_config(
         if missing:
             raise KeyError(f"Mix scenarios missing required cases: {missing}")
         mix_scenarios = {case: mix_scenarios[case] for case in allowed}
-    raw_baseline_mix = baseline_mix_case if baseline_mix_case is not None else module_cfg.get("baseline_mix_case")
+    raw_baseline_mix = (
+        baseline_mix_case if baseline_mix_case is not None else module_cfg.get("baseline_mix_case")
+    )
     baseline_mix = str(raw_baseline_mix).strip() if raw_baseline_mix is not None else ""
     if not baseline_mix:
         baseline_mix = BASE_MIX_CASE
@@ -187,7 +191,8 @@ def run_from_config(
             available = ", ".join(sorted(mix_scenarios)) or "<none>"
             raise ValueError(
                 f"Baseline mix '{baseline_mix}' is not defined in mix_scenarios. "
-                f"Available mixes: {available}. Update calc_emissions.baseline_mix_case or mix_scenarios."
+                f"Available mixes: {available}. "
+                f"Update calc_emissions.baseline_mix_case or mix_scenarios."
             )
 
         # Otherwise, fall back to common synthetic/default cases.
@@ -236,7 +241,7 @@ def run_from_config(
         per_mix_results[mix_name] = {}
         for demand_name in demand_scenarios:
             LOGGER.info("  • demand case '%s'", demand_name)
-            demand_series = _resolve_demand_series(
+            demand_series, electrification = _resolve_demand_series(
                 years,
                 demand_scenarios,
                 demand_name,
@@ -260,6 +265,7 @@ def run_from_config(
                 emission_factors=emission_factors,
                 demand_case=demand_name,
                 mix_case=mix_name,
+                electrification=electrification,
             )
             per_mix_results[mix_name][demand_name] = scenario_result
             results[scenario_id] = scenario_result
@@ -286,6 +292,9 @@ def run_from_config(
                 },
                 total_emissions_mt={k: s.copy() for k, s in res.total_emissions_mt.items()},
                 delta_mtco2=res.delta_mtco2.copy(),
+                electrification=(
+                    res.electrification.copy() if res.electrification is not None else None
+                ),
             )
     return results
 
@@ -298,6 +307,7 @@ def calculate_emissions(
     *,
     demand_case: str,
     mix_case: str,
+    electrification: pd.Series | None = None,
 ) -> EmissionScenarioResult:
     """Calculate generation and emissions for a single scenario."""
     if not isinstance(demand_series.index, pd.Index):
@@ -336,6 +346,7 @@ def calculate_emissions(
         delta_mtco2=pd.Series(
             np.zeros_like(co2_series.values), index=co2_series.index, dtype=float
         ),
+        electrification=electrification,
     )
 
 
@@ -372,9 +383,7 @@ def _assign_global_deltas(
     baseline_key = compose_scenario_name(baseline_case, baseline_mix)
     baseline_res = results.get(baseline_key)
     if baseline_res is None:
-        raise ValueError(
-            f"Missing baseline scenario '{baseline_key}' required for global deltas."
-        )
+        raise ValueError(f"Missing baseline scenario '{baseline_key}' required for global deltas.")
     baseline_co2 = baseline_res.total_emissions_mt.get("co2")
     if baseline_co2 is None:
         index = pd.Index([int(y) for y in years])
@@ -524,7 +533,7 @@ def _resolve_demand_series(
     custom: Mapping[int, float] | None,
     *,
     config_path: Path | None = None,
-) -> pd.Series:
+) -> tuple[pd.Series, pd.Series | None]:
     if scenario_name:
         scenario = scenarios.get(scenario_name)
         if scenario is None:
@@ -537,7 +546,7 @@ def _resolve_demand_series(
                 raise TypeError(
                     f"Demand scenario '{scenario_name}' dynamic_model must be a mapping."
                 )
-            return build_dynamic_demand_series(
+            return build_dynamic_demand_components(
                 dynamic_model,
                 years,
                 config_path=config_path,
@@ -551,7 +560,7 @@ def _resolve_demand_series(
         raise ValueError("Provide either 'demand_scenario' or 'demand_custom'.")
 
     series = _values_to_series(values, years, "demand")
-    return series.rename("demand_twh")
+    return series.rename("demand_twh"), None
 
 
 def _resolve_mix_shares(

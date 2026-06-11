@@ -6,8 +6,11 @@ from .calculator import (
 )
 from .constants import BASE_DEMAND_CASE, BASE_MIX_CASE, POLLUTANTS
 from .demand_model import (
+    build_dynamic_demand_components,
     build_dynamic_demand_series,
     load_base_electricity_demand_twh,
+    load_workbook_reform_price_index,
+    load_workbook_shiftable_share,
     validate_elasticities,
 )
 
@@ -19,7 +22,10 @@ __all__ = [
     "calculate_emissions",
     "compose_scenario_name",
     "run_from_config",
+    "build_dynamic_demand_components",
     "build_dynamic_demand_series",
     "load_base_electricity_demand_twh",
+    "load_workbook_reform_price_index",
+    "load_workbook_shiftable_share",
     "validate_elasticities",
 ]

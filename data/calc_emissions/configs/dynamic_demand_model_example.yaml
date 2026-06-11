@@ -6,6 +6,12 @@
 #
 # Keep TODO_SOURCE values until a data source or explicit scenario assumption
 # has been selected. The model rejects TODO_SOURCE at runtime.
+#
+# Optional population block (shown in every template below): when present the
+# income driver is interpreted as TOTAL GDP and converted internally to GDP
+# per capita, and demand is additionally scaled by Pop_t / Pop_ref:
+#   D_t = D_ref * (Pop_t/Pop_ref) * (e_t/e_ref) * (y_t/y_ref)^B * (P_t/P_ref)^C
+# Omit the population block to keep the original total-income formula.
 
 calc_emissions:
   demand_scenarios:
@@ -20,8 +26,15 @@ calc_emissions:
           demand_column: Total electricity demand
           year: 2023
         income:
-          source: TODO_SOURCE
-          value_column: TODO_SOURCE
+          source: data/calc_emissions/demand_drivers/gdp.csv
+          country_column: country_code
+          country_code: TODO_SOURCE
+          value_column: value
+        population:
+          source: data/calc_emissions/demand_drivers/population.csv
+          country_column: country_code
+          country_code: TODO_SOURCE
+          value_column: value
         price:
           source: TODO_SOURCE
           value_column: TODO_SOURCE
@@ -43,8 +56,15 @@ calc_emissions:
           demand_column: Total electricity demand
           year: 2023
         income:
-          source: TODO_SOURCE
-          value_column: TODO_SOURCE
+          source: data/calc_emissions/demand_drivers/gdp.csv
+          country_column: country_code
+          country_code: TODO_SOURCE
+          value_column: value
+        population:
+          source: data/calc_emissions/demand_drivers/population.csv
+          country_column: country_code
+          country_code: TODO_SOURCE
+          value_column: value
         price:
           source: TODO_SOURCE
           value_column: TODO_SOURCE
@@ -69,17 +89,34 @@ calc_emissions:
         reform:
           # D_shiftable_0 = workbook base demand * shiftable_share.
           # D_residual_0 = workbook base demand - D_shiftable_0.
-          price_index: TODO_SOURCE  # P_reform / P_0
+          # 'source: workbook' derives the value from Electricity_OECD.xlsx:
+          #   shiftable_share = regulated demand / total demand (Reference values)
+          #   price_index = Scenario 1 regulated price / base regulated price
+          shiftable_share:
+            source: workbook
+          price_index:
+            source: workbook
+            bound: lower  # 'lower' or 'upper' Scenario 1 bound table
           price_elasticity: TODO_SOURCE  # C_reform, -0.8 <= C <= -0.2
-          shiftable_share: TODO_SOURCE
+          # Explicit scalars remain supported instead of the workbook keys:
+          # shiftable_share: 0.76
+          # price_index: 1.29
         income:
-          source: TODO_SOURCE
-          value_column: TODO_SOURCE
-        post_reform_price:
-          # Homogeneous post-reform electricity price path. Set the reform-year
-          # value as P_reform, or use an index with reform_year equal to 1.0.
-          source: TODO_SOURCE
-          value_column: TODO_SOURCE
+          source: data/calc_emissions/demand_drivers/gdp.csv
+          country_column: country_code
+          country_code: TODO_SOURCE
+          value_column: value
+        population:
+          source: data/calc_emissions/demand_drivers/population.csv
+          country_column: country_code
+          country_code: TODO_SOURCE
+          value_column: value
+        # post_reform_price is optional. When omitted the homogeneous
+        # post-reform price is held constant at the reform-year level
+        # (index 1.0 in every year). Provide a path to override:
+        # post_reform_price:
+        #   source: TODO_SOURCE
+        #   value_column: TODO_SOURCE
         electrification:
           form: linear_income
           base_share: TODO_SOURCE

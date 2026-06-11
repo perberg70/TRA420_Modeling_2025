@@ -28,7 +28,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Sequence
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -39,9 +39,7 @@ LOGGER = logging.getLogger("additional_plots_standalone")
 # ---------- Data helpers ----------
 
 
-def _load_deltas(
-    co2_path: Path, demand_cases: Iterable[str], baseline_case: str
-) -> pd.DataFrame:
+def _load_deltas(co2_path: Path, demand_cases: Iterable[str], baseline_case: str) -> pd.DataFrame:
     if not co2_path.exists():
         raise FileNotFoundError(f"Missing CO₂ file: {co2_path}")
     df = pd.read_csv(co2_path, comment="#")
@@ -384,7 +382,9 @@ def main() -> None:
         raise SystemExit("No mix scenarios found. Provide --mix or check results_root.")
 
     years = sorted({int(y) for y in args.years})
-    cumulative_years = sorted({int(y) for y in args.cumulative_years}) if args.cumulative_years else []
+    cumulative_years = (
+        sorted({int(y) for y in args.cumulative_years}) if args.cumulative_years else []
+    )
     baseline_case = str(args.baseline_demand).strip() or "base_demand"
     mean_case = str(args.mean_case).strip()
     lower_case = str(args.lower_case).strip()

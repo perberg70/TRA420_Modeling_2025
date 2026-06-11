@@ -55,7 +55,7 @@ def _select_ensemble_row(
     if member_index is not None:
         if not 0 <= member_index < len(table):
             raise ValueError(
-                f"ensemble_member_index {member_index} outside available range 0-{len(table)-1}."
+                f"ensemble_member_index {member_index} outside available range 0-{len(table) - 1}."
             )
         return table.iloc[member_index]
     return table.iloc[0]

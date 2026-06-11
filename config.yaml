@@ -98,6 +98,14 @@ air_pollution:
   country_weights: equal  # Use 'equal' for uniform averaging or provide {Country: weight}.
   scenarios: all  # 'all' or list of emission scenario names to process.
   value_of_statistical_life_usd: 3750000  # Monetised value per statistical life (USD-2025).
+  # indoor:  # Optional: household (indoor) air pollution deaths linked to electrification.
+  #   stats_file: data/air_pollution/indoor_pollution_stats.csv  # country, baseline_deaths_per_year, base_electrification (fill before enabling; e.g. IHME GBD household air pollution).
+  # health_costs:  # Optional: monetise ambient + indoor mortality beyond VSL.
+  #   healthcare_cost_usd_per_death: 0  # Direct treatment / end-of-life healthcare costs per death (USD).
+  #   income_loss_usd_per_death: 0  # Lost earnings / productivity per death (USD).
+  #   morbidity_cases_per_death: 0  # Non-fatal illness episodes per death (scales the per-case costs below).
+  #   healthcare_cost_usd_per_case: 0  # Healthcare cost per non-fatal case (USD).
+  #   income_loss_usd_per_case: 0  # Income loss per non-fatal case (USD).
   pollutants:
     pm25:
       stats_file: data/air_pollution/PM25_country_stats.csv

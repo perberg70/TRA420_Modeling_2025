@@ -2,10 +2,12 @@ import json
 import math
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from air_pollution import run_from_config as run_air_pollution
+from calc_emissions import EmissionScenarioResult
 
 
 def test_air_pollution_run_from_config_creates_outputs(tmp_path: Path):
@@ -295,3 +297,215 @@ def test_air_pollution_with_baseline_deaths_and_vsl(tmp_path: Path):
     assert math.isclose(total_summary["baseline_deaths_per_year"].iloc[0], 800.0)
 
     assert results["policy"].total_mortality_summary is not None
+
+
+def _make_emission_result(
+    name: str,
+    demand_case: str,
+    mix_case: str,
+    years: list[int],
+    pm25_values: list[float],
+    electrification: dict[int, float] | None = None,
+) -> EmissionScenarioResult:
+    index = pd.Index(years)
+    pm25 = pd.Series(pm25_values, index=index, dtype=float)
+    demand = pd.Series(100.0, index=index, dtype=float)
+    elec = (
+        pd.Series(electrification, dtype=float).sort_index()
+        if electrification is not None
+        else None
+    )
+    return EmissionScenarioResult(
+        name=name,
+        demand_case=demand_case,
+        mix_case=mix_case,
+        years=years,
+        demand_twh=demand,
+        generation_twh=pd.DataFrame({"coal": demand}),
+        technology_emissions_mt={"pm25": pd.DataFrame({"coal": pm25})},
+        total_emissions_mt={"pm25": pm25, "co2": pm25.copy()},
+        delta_mtco2=pd.Series(np.zeros(len(index)), index=index, dtype=float),
+        electrification=elec,
+    )
+
+
+def test_air_pollution_indoor_module_and_health_costs(tmp_path: Path):
+    root = tmp_path
+
+    stats = pd.DataFrame(
+        {
+            "country": ["Albania"],
+            "median": [10.0],
+            "baseline_deaths_per_year": [1000.0],
+        }
+    )
+    stats_path = root / "stats.csv"
+    stats.to_csv(stats_path, index=False)
+
+    indoor_stats = pd.DataFrame(
+        {
+            "country": ["Albania"],
+            "baseline_deaths_per_year": [1000.0],
+            "base_electrification": [0.5],
+        }
+    )
+    indoor_path = root / "indoor.csv"
+    indoor_stats.to_csv(indoor_path, index=False)
+
+    output_dir = root / "air_pollution"
+    config = {
+        "calc_emissions": {},
+        "air_pollution": {
+            "output_directory": str(output_dir),
+            "electricity_share": 1.0,
+            "value_of_statistical_life_usd": 1_000_000.0,
+            "pollutants": {
+                "pm25": {
+                    "stats_file": str(stats_path),
+                    "relative_risk": 1.08,
+                    "reference_delta": 10.0,
+                }
+            },
+            "indoor": {"stats_file": str(indoor_path)},
+            "health_costs": {
+                "healthcare_cost_usd_per_death": 10_000.0,
+                "income_loss_usd_per_death": 20_000.0,
+            },
+        },
+    }
+    config_path = root / "config.yaml"
+    config_path.write_text(json.dumps(config))
+
+    years = [2030, 2040]
+    emission_results = {
+        "base_mix__base_demand": _make_emission_result(
+            "base_mix__base_demand", "base_demand", "base_mix", years, [1.0, 1.0]
+        ),
+        "base_mix__policy": _make_emission_result(
+            "base_mix__policy",
+            "policy",
+            "base_mix",
+            years,
+            [0.5, 0.5],
+            electrification={2030: 0.5, 2040: 0.75},
+        ),
+    }
+
+    results = run_air_pollution(config_path=config_path, emission_results=emission_results)
+    policy = results["base_mix__policy"]
+
+    # Indoor deaths scale with the non-electrified share: (1 - e_t) / (1 - 0.5).
+    assert policy.indoor_summary is not None
+    indoor = policy.indoor_summary.set_index("year")
+    assert indoor.loc[2030, "indoor_deaths_per_year"] == pytest.approx(1000.0)
+    assert indoor.loc[2030, "delta_indoor_deaths_per_year"] == pytest.approx(0.0)
+    assert indoor.loc[2040, "indoor_deaths_per_year"] == pytest.approx(500.0)
+    assert indoor.loc[2040, "delta_indoor_deaths_per_year"] == pytest.approx(-500.0)
+    assert indoor.loc[2040, "delta_value_usd"] == pytest.approx(-500.0 * 1_000_000.0)
+    assert indoor.loc[2040, "delta_healthcare_cost_usd"] == pytest.approx(-500.0 * 10_000.0)
+    assert indoor.loc[2040, "delta_income_loss_usd"] == pytest.approx(-500.0 * 20_000.0)
+    assert indoor.loc[2040, "delta_total_cost_usd"] == pytest.approx(
+        -500.0 * (1_000_000.0 + 10_000.0 + 20_000.0)
+    )
+
+    # Ambient mortality from the log-linear model with a halved emission ratio.
+    beta = math.log(1.08) / 10.0
+    pct_change = math.exp(beta * 10.0 * -0.5) - 1.0
+    ambient_delta = 1000.0 * pct_change
+
+    assert policy.total_mortality_summary is not None
+    total = policy.total_mortality_summary.set_index("year")
+    assert total.loc[2040, "delta_deaths_per_year"] == pytest.approx(ambient_delta)
+    assert total.loc[2040, "delta_indoor_deaths_per_year"] == pytest.approx(-500.0)
+    assert total.loc[2040, "delta_deaths_total_per_year"] == pytest.approx(ambient_delta - 500.0)
+
+    # Combined monetised summary covers ambient + indoor deaths.
+    assert policy.health_cost_summary is not None
+    costs = policy.health_cost_summary.set_index("year")
+    combined_2040 = ambient_delta - 500.0
+    assert costs.loc[2040, "ambient_delta_deaths_per_year"] == pytest.approx(ambient_delta)
+    assert costs.loc[2040, "indoor_delta_deaths_per_year"] == pytest.approx(-500.0)
+    assert costs.loc[2040, "total_delta_deaths_per_year"] == pytest.approx(combined_2040)
+    assert costs.loc[2040, "delta_value_usd"] == pytest.approx(combined_2040 * 1_000_000.0)
+    assert costs.loc[2040, "delta_healthcare_cost_usd"] == pytest.approx(combined_2040 * 10_000.0)
+    assert costs.loc[2040, "delta_income_loss_usd"] == pytest.approx(combined_2040 * 20_000.0)
+    assert costs.loc[2040, "delta_total_cost_usd"] == pytest.approx(
+        combined_2040 * (1_000_000.0 + 10_000.0 + 20_000.0)
+    )
+
+    # Per-pollutant mortality summaries also carry the new cost columns.
+    pm25_summary = policy.pollutant_results["pm25"].deaths_summary
+    assert pm25_summary is not None
+    assert "delta_healthcare_cost_usd" in pm25_summary.columns
+    assert "delta_total_cost_usd" in pm25_summary.columns
+
+    scenario_dir = output_dir / "base_mix__policy"
+    assert (scenario_dir / "indoor_health_impact.csv").exists()
+    assert (scenario_dir / "indoor_mortality_summary.csv").exists()
+    assert (scenario_dir / "health_cost_summary.csv").exists()
+
+    impacts = pd.read_csv(scenario_dir / "indoor_health_impact.csv")
+    assert set(impacts["country"]) == {"Albania"}
+    row_2040 = impacts.loc[impacts["year"] == 2040].iloc[0]
+    assert row_2040["electrification_share"] == pytest.approx(0.75)
+
+
+def test_air_pollution_indoor_skipped_for_static_scenarios(tmp_path: Path):
+    root = tmp_path
+
+    stats = pd.DataFrame(
+        {
+            "country": ["Albania"],
+            "median": [10.0],
+            "baseline_deaths_per_year": [1000.0],
+        }
+    )
+    stats_path = root / "stats.csv"
+    stats.to_csv(stats_path, index=False)
+
+    indoor_stats = pd.DataFrame(
+        {
+            "country": ["Albania"],
+            "baseline_deaths_per_year": [1000.0],
+            "base_electrification": [0.5],
+        }
+    )
+    indoor_path = root / "indoor.csv"
+    indoor_stats.to_csv(indoor_path, index=False)
+
+    config = {
+        "calc_emissions": {},
+        "air_pollution": {
+            "output_directory": str(root / "air_pollution"),
+            "electricity_share": 1.0,
+            "pollutants": {
+                "pm25": {
+                    "stats_file": str(stats_path),
+                    "relative_risk": 1.08,
+                    "reference_delta": 10.0,
+                }
+            },
+            "indoor": {"stats_file": str(indoor_path)},
+        },
+    }
+    config_path = root / "config.yaml"
+    config_path.write_text(json.dumps(config))
+
+    years = [2030, 2040]
+    emission_results = {
+        "base_mix__base_demand": _make_emission_result(
+            "base_mix__base_demand", "base_demand", "base_mix", years, [1.0, 1.0]
+        ),
+        "base_mix__policy": _make_emission_result(
+            "base_mix__policy", "policy", "base_mix", years, [0.5, 0.5]
+        ),
+    }
+
+    results = run_air_pollution(config_path=config_path, emission_results=emission_results)
+    policy = results["base_mix__policy"]
+
+    # Without any electrification path the indoor module produces no output.
+    assert policy.indoor_summary is None
+    assert policy.indoor_impacts is None
+    scenario_dir = root / "air_pollution" / "base_mix__policy"
+    assert not (scenario_dir / "indoor_health_impact.csv").exists()

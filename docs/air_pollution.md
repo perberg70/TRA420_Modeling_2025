@@ -26,9 +26,17 @@ changes and applying concentration–response functions.
    percentage changes into absolute deaths per year. Country weights control
    the averaging across countries, and pollutant weights control the combined
    summary.
-6. **Write results** – Outputs per-pollutant health impacts, optional
-   per-pollutant mortality summaries, and an aggregate summary of the combined
-   mortality change for all pollutants with provided baselines.
+6. **Indoor (household) air pollution** – Optional module that scales baseline
+   indoor air pollution deaths with the household electrification path from the
+   dynamic demand model: as electrification rises, solid-fuel use and the
+   associated indoor burden decline.
+7. **Monetise health impacts** – Deaths are valued with the configured VSL;
+   optional `health_costs` unit values additionally estimate healthcare costs
+   and income/productivity losses for both ambient and indoor mortality.
+8. **Write results** – Outputs per-pollutant health impacts, optional
+   per-pollutant mortality summaries, indoor mortality summaries, a combined
+   health-cost summary, and an aggregate summary of the combined mortality
+   change for all pollutants with provided baselines.
 
 This module is intentionally lightweight and deterministic: all effects are a
 transparent scaling of published concentration statistics by emission ratios,
@@ -109,6 +117,42 @@ $$
     \Delta m^{\text{total}}_t
 $$
 
+- **Indoor (household) mortality**  
+  Indoor exposure is assumed proportional to the non-electrified household
+  share. With electrification share $e_{c,t}$ (from the dynamic demand model)
+  and reference share $e_{c,0}$:
+
+$$
+D^{\text{indoor}}_{c,t} = D^{\text{indoor}}_{c,0} \times
+\frac{1 - e_{c,t}}{1 - e_{c,0}}, \qquad
+\Delta D^{\text{indoor}}_{c,t} = D^{\text{indoor,scenario}}_{c,t} -
+D^{\text{indoor,baseline}}_{c,t}
+$$
+
+  The reference share $e_{c,0}$ comes from the optional
+  `base_electrification` column in the indoor statistics file, falling back to
+  the first year of the scenario's electrification series. Static demand cases
+  without an electrification path keep constant indoor deaths, so deltas arise
+  only when a scenario electrifies faster (or slower) than the baseline. A
+  fully electrified reference ($e_{c,0} = 1$) removes the indoor burden
+  entirely.
+
+- **Healthcare costs and income loss**  
+  Each mortality delta is monetised with the VSL plus configurable unit
+  costs. With $h_d$/$h_c$ the healthcare cost per death/per non-fatal case,
+  $w_d$/$w_c$ the income loss per death/per case, and $k$ the number of
+  non-fatal cases per death:
+
+$$
+\text{Healthcare}_t = \Delta D_t (h_d + k h_c), \qquad
+\text{IncomeLoss}_t = \Delta D_t (w_d + k w_c)
+$$
+
+$$
+\text{TotalCost}_t = \Delta D_t \times \text{VSL} + \text{Healthcare}_t +
+\text{IncomeLoss}_t
+$$
+
 ## Units and Conventions
 
 - Emissions from `calc_emissions` are in megatonnes (Mt) per year. Only ratios
@@ -132,6 +176,14 @@ air_pollution:
   country_weights: equal              # Normalised weights per country; override with {Country: weight}
   scenarios: all                      # Scenario names from calc_emissions (or explicit list)
   value_of_statistical_life_usd: 3750000        # Optional VSL (USD per life) for monetising deaths
+  indoor:                             # Optional indoor (household) air pollution module
+    stats_file: data/air_pollution/indoor_pollution_stats.csv
+  health_costs:                       # Optional unit costs applied to ambient + indoor mortality
+    healthcare_cost_usd_per_death: 25000   # Treatment / end-of-life healthcare cost per death
+    income_loss_usd_per_death: 150000      # Lost earnings / productivity per death
+    morbidity_cases_per_death: 0           # Non-fatal illness episodes per death (optional)
+    healthcare_cost_usd_per_case: 0        # Healthcare cost per non-fatal case (optional)
+    income_loss_usd_per_case: 0            # Income loss per non-fatal case (optional)
   pollutants:
     pm25:
       stats_file: data/air_pollution/PM25_country_stats.csv
@@ -177,6 +229,20 @@ air_pollution:
   `calc_emissions`: when `delta_baseline_mode: global`, every scenario is
   compared to `baseline_mix_case__baseline_demand_case`; otherwise each mix is
   compared to its own `base_demand` baseline.
+- `indoor.stats_file`: CSV with columns `country`, `baseline_deaths_per_year`,
+  and optional `base_electrification` (reference electrification share used in
+  the indoor scaling; defaults to the first year of the scenario's
+  electrification path). A template lives at
+  `data/air_pollution/indoor_pollution_stats.csv`; values left as
+  `TODO_SOURCE` are rejected at runtime. Baseline indoor deaths can be sourced
+  from IHME GBD household air pollution estimates (also exposed via Our World
+  in Data). The electrification paths come from the dynamic demand model in
+  `calc_emissions` (per-country series are preserved through the multi-country
+  aggregator); scenarios whose demand cases are static produce no indoor
+  response and are skipped.
+- `health_costs`: all keys optional and non-negative. Costs are applied to the
+  mortality deltas of the per-pollutant summaries, the total mortality summary,
+  the indoor summary, and the combined `health_cost_summary.csv`.
 
 ### Country and Scenario Selection
 
@@ -252,7 +318,34 @@ For each scenario and pollutant:
 
 - `total_mortality_summary.csv` – combined mortality summary when a module-level
   baseline is provided; columns mirror the per-pollutant summary and reflect
-  pollutant weights specified in `baseline_deaths.weights`.
+  pollutant weights specified in `baseline_deaths.weights`. When the indoor
+  module is active the file gains `delta_indoor_deaths_per_year` and
+  `delta_deaths_total_per_year` (ambient + indoor) columns.
+
+- `indoor_health_impact.csv` (optional) – per-country indoor mortality when
+  `air_pollution.indoor` is configured; columns:
+  - `country`
+  - `year`
+  - `electrification_share`
+  - `baseline_indoor_deaths_per_year`
+  - `indoor_deaths_per_year`
+  - `delta_indoor_deaths_per_year`
+
+- `indoor_mortality_summary.csv` (optional) – indoor deaths summed across
+  countries per year, with `delta_value_usd` (VSL) and, when `health_costs` is
+  configured, `delta_healthcare_cost_usd`, `delta_income_loss_usd`, and
+  `delta_total_cost_usd`.
+
+- `health_cost_summary.csv` (optional) – combined ambient + indoor monetised
+  summary (written when a VSL or `health_costs` is configured); columns:
+  - `year`
+  - `ambient_delta_deaths_per_year`
+  - `indoor_delta_deaths_per_year`
+  - `total_delta_deaths_per_year`
+  - `delta_value_usd` (VSL)
+  - `delta_healthcare_cost_usd`
+  - `delta_income_loss_usd`
+  - `delta_total_cost_usd`
 - `<pollutant>_concentration_summary.csv` – per-country concentrations used by
   downstream modules. Columns:
   - `year`
@@ -275,6 +368,9 @@ results/air_pollution/<scenario>/
   nox_mortality_summary.csv         # if per-pollutant baseline provided
   nox_concentration_summary.csv
   total_mortality_summary.csv       # if module-level baseline provided
+  indoor_health_impact.csv          # if indoor module configured
+  indoor_mortality_summary.csv      # if indoor module configured
+  health_cost_summary.csv           # if VSL or health_costs configured
 ```
 
 The `AirPollutionResult` object also exposes:
@@ -284,6 +380,9 @@ The `AirPollutionResult` object also exposes:
   - `country_weights`: normalised weights used during aggregation
   - `weighted_percent_change`: per-year weighted mortality percentage change
   - `deaths_summary`: per-pollutant mortality deltas (if configured)
+- `indoor_impacts` / `indoor_summary`: per-country and aggregated indoor
+  mortality results (if configured)
+- `health_cost_summary`: combined ambient + indoor monetised summary
 
 ## Validation Tips
 
@@ -314,6 +413,8 @@ The `AirPollutionResult` object also exposes:
 
 ## References
 
+- [Indoor (household) air pollution burden]: IHME (2024) *Global Burden of Disease — Household air pollution from solid fuels* (<https://www.healthdata.org/research-analysis/health-risks-issues/household-air-pollution>); country time series available via Our World in Data (<https://ourworldindata.org/indoor-air-pollution>)
+- [Cost-of-illness / morbidity valuation guidance]: WHO Regional Office for Europe & OECD (2015) *Economic cost of the health impact of air pollution in Europe: Clean air, health and wealth* (<https://www.who.int/europe/publications>) and OECD (2014) *The Cost of Air Pollution: Health Impacts of Road Transport* (<http://dx.doi.org/10.1787/9789264210448-en>) — basis for healthcare-cost and income-loss unit values
 - [Relative risks and concentration-response]: Chen et al. (2024) *Long-term NO₂ exposure and mortality* (<https://www.sciencedirect.com/science/article/pii/S0269749123019735>)
 - [Country concentration statistics]: EEA (2024) *Air Pollution Country Fact Sheets* (<https://www.eea.europa.eu/en/topics/in-depth/air-pollution/air-pollution-country-fact-sheets-2024>)
 - [Regulatory context]: CEE Bankwatch (2021) *Comply or Close* (<https://www.complyorclose.org/wp-content/uploads/2021/09/En-COMPLY-OR-CLOSE-web.pdf>)

@@ -65,22 +65,20 @@ def _ensure_run_directory(path: Path, run_directory: str | None) -> Path:
     return rebuilt
 
 
-def _load_country_settings() -> (
-    tuple[
-        Path,
-        str,
-        Path,
-        Path,
-        Path,
-        list[str],
-        list[str],
-        dict[str, int] | None,
-        str | None,
-        str,
-        str,
-        str,
-    ]
-):
+def _load_country_settings() -> tuple[
+    Path,
+    str,
+    Path,
+    Path,
+    Path,
+    list[str],
+    list[str],
+    dict[str, int] | None,
+    str | None,
+    str,
+    str,
+    str,
+]:
     config_path = get_config_path(ROOT / "config.yaml")
     config = {}
     if config_path.exists():
@@ -142,12 +140,19 @@ def _load_country_settings() -> (
         str(countries_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
     )
     baseline_mix_case = (
-        str(countries_cfg.get("baseline_mix_case", module_cfg.get("baseline_mix_case", BASE_MIX_CASE)))
-        .strip()
+        str(
+            countries_cfg.get(
+                "baseline_mix_case", module_cfg.get("baseline_mix_case", BASE_MIX_CASE)
+            )
+        ).strip()
         or BASE_MIX_CASE
     )
     delta_mode = (
-        str(countries_cfg.get("delta_baseline_mode", module_cfg.get("delta_baseline_mode", "per_mix")))
+        str(
+            countries_cfg.get(
+                "delta_baseline_mode", module_cfg.get("delta_baseline_mode", "per_mix")
+            )
+        )
         .strip()
         .lower()
         or "per_mix"
@@ -196,6 +201,9 @@ def _clone_result(result: EmissionScenarioResult) -> EmissionScenarioResult:
         technology_emissions_mt={k: df.copy() for k, df in result.technology_emissions_mt.items()},
         total_emissions_mt={k: series.copy() for k, series in result.total_emissions_mt.items()},
         delta_mtco2=result.delta_mtco2.copy(),
+        electrification=(
+            result.electrification.copy() if result.electrification is not None else None
+        ),
     )
 
 
@@ -237,6 +245,7 @@ def _build_aggregated_results(
     baseline_case: str,
     baseline_mix_case: str,
     delta_mode: str,
+    per_country_map: Mapping[str, dict[str, EmissionScenarioResult]] | None = None,
 ) -> dict[str, EmissionScenarioResult]:
     aggregated: Dict[tuple[str, str], EmissionScenarioResult] = {}
     for result_map in per_country_results:
@@ -248,6 +257,24 @@ def _build_aggregated_results(
                 aggregated[key] = clone
             else:
                 _accumulate_result(existing, clone)
+
+    # Aggregated emissions cannot carry a single national electrification path;
+    # keep the per-country series so downstream modules (e.g. indoor air
+    # pollution) can use them.
+    if per_country_map:
+        for country, result_map in per_country_map.items():
+            for scenario in result_map.values():
+                if scenario.electrification is None:
+                    continue
+                key = (scenario.mix_case, scenario.demand_case)
+                target = aggregated.get(key)
+                if target is None:
+                    continue
+                if target.electrification_by_country is None:
+                    target.electrification_by_country = {}
+                target.electrification_by_country[country] = scenario.electrification.copy()
+        for target in aggregated.values():
+            target.electrification = None
 
     if not aggregated:
         raise ValueError("No scenarios aggregated – ensure country configs are configured.")
@@ -263,7 +290,9 @@ def _build_aggregated_results(
     combined: Dict[str, EmissionScenarioResult] = {}
     for (mix_case, demand_case), scenario in aggregated.items():
         if delta_mode == "global":
-            baseline_co2 = baseline_global.total_emissions_mt.get("co2") if baseline_global else None
+            baseline_co2 = (
+                baseline_global.total_emissions_mt.get("co2") if baseline_global else None
+            )
             totals = scenario.total_emissions_mt.get("co2")
             if baseline_co2 is not None and totals is not None:
                 idx = baseline_co2.index.union(totals.index)
@@ -447,7 +476,11 @@ def run_all_countries(
                         global_horizon,
                     )
     aggregated_results = _build_aggregated_results(
-        per_country_results, baseline_case, baseline_mix_case, delta_mode
+        per_country_results,
+        baseline_case,
+        baseline_mix_case,
+        delta_mode,
+        per_country_map=per_country_map,
     )
 
     aggregate_dest = output or default_output

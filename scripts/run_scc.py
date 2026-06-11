@@ -1516,8 +1516,7 @@ def _run_single_configuration(
             )
             if not frames:
                 parser.error(
-                    "Unable to construct SSP temperature scenarios based on"
-                    "climate_module settings."
+                    "Unable to construct SSP temperature scenarios based onclimate_module settings."
                 )
             scenario_temperature.clear()
             scenario_climate.clear()

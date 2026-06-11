@@ -2314,13 +2314,13 @@ def _plot_absolute_emissions_country_tiles(
         figsize=(ncols * 4.2, nrows * 3.2),
         sharex=True,
         sharey=False,
-        layout="constrained"
+        layout="constrained",
     )
     axes_flat = np.atleast_1d(axes).ravel()
     legend_handles: dict[str, object] = {}
     baseline_handles: dict[str, object] = {}
 
-    for ax, country in zip(axes_flat, countries):
+    for ax, country in zip(axes_flat, countries, strict=False):
         mix_map = country_data.get(country, {})
         plotted = False
         for idx, (mix, demand_map) in enumerate(sorted(mix_map.items(), key=lambda item: item[0])):

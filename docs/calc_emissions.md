@@ -110,6 +110,44 @@ and unit in column D. Units are converted to TWh as follows: MWh / 1,000,000;
 GWh / 1,000; TWh unchanged. For example, a test value of 30,021 GWh becomes
 30.021 TWh.
 
+#### Population term (per-capita form)
+
+Each dynamic mode accepts an optional `population` driver block (same
+`values`/`source` mechanics as `income`). When present, the income driver is
+interpreted as **total GDP** and converted internally to GDP per capita
+($y_t = Y_t / Pop_t$), and demand is additionally scaled by population growth:
+
+$$
+D_t = D_{ref} \times \frac{Pop_t}{Pop_{ref}} \times \frac{e_t}{e_{ref}} \times
+\left(\frac{y_t}{y_{ref}}\right)^B \times
+\left(\frac{P_t}{P_{ref}}\right)^{C_t}
+$$
+
+This per-capita form avoids double-counting population growth inside the income
+elasticity. When `population` is omitted, the original total-income formula is
+used unchanged. With population enabled, the `linear_income` electrification
+form also evaluates against GDP per capita.
+
+#### Per-country driver files
+
+Country-level GDP and population paths live in
+`data/calc_emissions/demand_drivers/gdp.csv` and
+`data/calc_emissions/demand_drivers/population.csv` with the schema
+`country_code, year, value, unit, source` (codes ALB, BIH, KOS, MKD, MNE, SRB).
+Reference the files from a country config via:
+
+```yaml
+income:
+  source: data/calc_emissions/demand_drivers/gdp.csv
+  country_column: country_code
+  country_code: ALB
+  value_column: value
+```
+
+Values still set to `TODO_SOURCE` are rejected at runtime with a clear error,
+so scenarios never silently run on placeholders. Sparse year grids are
+interpolated linearly across the model horizon.
+
 The optional `mode: two_stage_reform` represents the subsidy-removal transition
 as a one-time segmented price shock, then switches to a homogeneous post-reform
 market. Use the canonical keys `reform`, `shiftable_share`, `price_index`,
@@ -139,6 +177,41 @@ price index. Years before `reform_year` are held at the workbook base demand
 because no pre-reform dynamic growth equation is defined in this mode. For
 example, with `base_year: 2023` and `reform_year: 2027`, requested years 2025
 and 2026 return the workbook base demand.
+
+`post_reform_price` may be omitted entirely; the model then holds the
+homogeneous post-reform price constant at the reform-year level (price index
+1.0 for every year).
+
+#### Workbook-derived reform inputs
+
+`reform.shiftable_share` and `reform.price_index` can be derived directly from
+`data/calc_emissions/Electricity_OECD.xlsx` instead of hard-coding scalars,
+keeping the workbook the single source of truth:
+
+```yaml
+reform:
+  shiftable_share:
+    source: workbook
+  price_index:
+    source: workbook
+    bound: lower   # or 'upper'
+  price_elasticity: -0.4
+```
+
+- `shiftable_share` = *Size of demand subject to shift* / *Total electricity
+  demand* from the `Reference values` table (units are harmonised to TWh
+  first).
+- `price_index` = *Price (regulated)* from the `Scenario 1` lower/upper bound
+  table divided by *Average price (regulated)* from the reference table. Prices
+  are normalised to a common `currency/MWh` basis (handling `ALL/kWh`,
+  `cEUR/kWh`, `EUR/MWh`, etc.); mixed currencies raise an error.
+
+The six country configs use this mechanism for `scen1_lower` (lower-bound
+price shock) and `scen1_upper` (upper-bound price shock), with `reform_year:
+2027`. From 2027 onward demand is therefore fully dynamic (reform shock plus
+GDP, population, and electrification growth); before 2027 demand is held at the
+workbook 2023 base demand, and `base_demand` remains the static no-reform
+counterfactual.
 
 Post-reform price elasticity can be fixed (`post_reform_price_elasticity.value`)
 or year-indexed (`post_reform_price_elasticity.values`). A scenario with

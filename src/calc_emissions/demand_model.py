@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -11,6 +12,7 @@ import pandas as pd
 TODO_SOURCE = "TODO_SOURCE"
 PRICE_ELASTICITY_MIN = -0.8
 PRICE_ELASTICITY_MAX = -0.2
+WORKBOOK_SOURCE = "workbook"
 
 
 def build_dynamic_demand_series(
@@ -20,6 +22,18 @@ def build_dynamic_demand_series(
     config_path: Path,
 ) -> pd.Series:
     """Return annual electricity demand in TWh for a configured dynamic model."""
+
+    demand, _ = build_dynamic_demand_components(cfg, years, config_path=config_path)
+    return demand
+
+
+def build_dynamic_demand_components(
+    cfg: Mapping[str, object],
+    years: Sequence[int],
+    *,
+    config_path: Path,
+) -> tuple[pd.Series, pd.Series]:
+    """Return (demand TWh, electrification share) series for a dynamic model."""
 
     if not isinstance(cfg, Mapping):
         raise TypeError("dynamic_model must be a mapping.")
@@ -37,7 +51,7 @@ def _build_total_dynamic_demand_series(
     years: Sequence[int],
     *,
     config_path: Path,
-) -> pd.Series:
+) -> tuple[pd.Series, pd.Series]:
     """Return demand using the original total-demand dynamic formula."""
 
     base_cfg = _required_mapping(cfg, "base_demand")
@@ -73,14 +87,18 @@ def _build_total_dynamic_demand_series(
         config_path=config_path,
         label="price",
     )
+    population = _load_optional_population(cfg, model_years, config_path=config_path)
+    # With population supplied, income is interpreted as total GDP and converted
+    # to GDP per capita so population growth is not double-counted.
+    income_effective = income if population is None else (income / population)
     electrification = _build_electrification_series(
         _required_mapping(cfg, "electrification"),
         model_years,
         base_year=base_year,
-        income=income,
+        income=income_effective,
     )
 
-    income_base = _positive_lookup(income, base_year, "income base")
+    income_base = _positive_lookup(income_effective, base_year, "income base")
     price_base = _positive_lookup(price, base_year, "price base")
     electrification_base = _positive_lookup(
         electrification,
@@ -91,10 +109,16 @@ def _build_total_dynamic_demand_series(
     demand = (
         float(base_demand_twh)
         * (electrification / electrification_base)
-        * np.power(income / income_base, income_elasticity)
+        * np.power(income_effective / income_base, income_elasticity)
         * np.power(price / price_base, price_elasticity)
     )
-    return demand.reindex(requested_years).rename("demand_twh")
+    if population is not None:
+        population_base = _positive_lookup(population, base_year, "population base")
+        demand = demand * (population / population_base)
+    return (
+        demand.reindex(requested_years).rename("demand_twh"),
+        electrification.reindex(requested_years).rename("electrification_share"),
+    )
 
 
 def _build_two_stage_reform_demand_series(
@@ -102,7 +126,7 @@ def _build_two_stage_reform_demand_series(
     years: Sequence[int],
     *,
     config_path: Path,
-) -> pd.Series:
+) -> tuple[pd.Series, pd.Series]:
     """Return demand using a one-time reform shock plus post-reform dynamics."""
 
     base_cfg = _required_mapping(cfg, "base_demand")
@@ -121,6 +145,11 @@ def _build_two_stage_reform_demand_series(
         cfg,
         "reform",
         aliases=("subsidy_reform", "subsidy_removal"),
+    )
+    reform_cfg = _resolve_workbook_reform_inputs(
+        reform_cfg,
+        base_cfg,
+        config_path=config_path,
     )
     residual_twh, shiftable_twh = _resolve_reform_segments(
         reform_cfg,
@@ -167,27 +196,20 @@ def _build_two_stage_reform_demand_series(
         config_path=config_path,
         label="income",
     )
-    price = _load_driver_series(
-        _required_mapping(
-            cfg,
-            "post_reform_price",
-            aliases=("price", "electricity_price", "price_path"),
-        ),
-        model_years,
-        config_path=config_path,
-        label="post_reform_price",
-    )
+    price = _load_post_reform_price_series(cfg, model_years, config_path=config_path)
+    population = _load_optional_population(cfg, model_years, config_path=config_path)
+    # With population supplied, income is interpreted as total GDP and converted
+    # to GDP per capita so population growth is not double-counted.
+    income_effective = income if population is None else (income / population)
     electrification = _build_electrification_series(
         _required_mapping(cfg, "electrification"),
         model_years,
         base_year=base_year,
-        income=income,
+        income=income_effective,
     )
 
-    demand_reform = residual_twh + shiftable_twh * (
-        reform_price_index**reform_price_elasticity
-    )
-    income_reform = _positive_lookup(income, reform_year, "income reform")
+    demand_reform = residual_twh + shiftable_twh * (reform_price_index**reform_price_elasticity)
+    income_reform = _positive_lookup(income_effective, reform_year, "income reform")
     price_reform = _positive_lookup(price, reform_year, "price reform")
     electrification_reform = _positive_lookup(
         electrification,
@@ -198,13 +220,78 @@ def _build_two_stage_reform_demand_series(
     demand = (
         float(demand_reform)
         * (electrification / electrification_reform)
-        * np.power(income / income_reform, income_elasticity)
+        * np.power(income_effective / income_reform, income_elasticity)
         * np.power(price / price_reform, post_reform_price_elasticity)
     )
+    if population is not None:
+        population_reform = _positive_lookup(population, reform_year, "population reform")
+        demand = demand * (population / population_reform)
     # Stage 2 begins at reform_year. Earlier requested years are intentionally
     # held at workbook base demand; no pre-reform growth equation is defined.
     demand.loc[demand.index < reform_year] = float(base_demand_twh)
-    return demand.reindex(requested_years).rename("demand_twh")
+    return (
+        demand.reindex(requested_years).rename("demand_twh"),
+        electrification.reindex(requested_years).rename("electrification_share"),
+    )
+
+
+def _load_post_reform_price_series(
+    cfg: Mapping[str, object],
+    years: Sequence[int],
+    *,
+    config_path: Path,
+) -> pd.Series:
+    """Return the post-reform price path, defaulting to a constant index of 1.0."""
+
+    for key in ("post_reform_price", "price", "electricity_price", "price_path"):
+        value = cfg.get(key)
+        if isinstance(value, Mapping):
+            return _load_driver_series(
+                value,
+                years,
+                config_path=config_path,
+                label="post_reform_price",
+            )
+        if value is not None:
+            raise TypeError(f"dynamic_model.{key} must be a mapping.")
+    # Default: hold the homogeneous post-reform price constant at the
+    # reform-year level (price index 1.0 for every year).
+    return pd.Series(
+        1.0,
+        index=pd.Index([int(year) for year in years]),
+        dtype=float,
+        name="post_reform_price",
+    )
+
+
+def _load_optional_population(
+    cfg: Mapping[str, object],
+    years: Sequence[int],
+    *,
+    config_path: Path,
+) -> pd.Series | None:
+    """Return the optional population driver series, validated to be positive."""
+
+    for key in ("population", "population_path", "pop"):
+        value = cfg.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, Mapping):
+            raise TypeError(f"dynamic_model.{key} must be a mapping.")
+        series = _load_driver_series(
+            value,
+            years,
+            config_path=config_path,
+            label="population",
+        )
+        if (series <= 0.0).any():
+            bad_years = [int(year) for year in series.index[series <= 0.0]]
+            raise ValueError(
+                f"dynamic_model.population must be positive for all years. "
+                f"Invalid years: {bad_years}."
+            )
+        return series
+    return None
 
 
 def validate_elasticities(income_elasticity: float, price_elasticity: float) -> None:
@@ -222,8 +309,7 @@ def _validate_income_elasticity(value: float, label: str) -> None:
 def _validate_price_elasticity(value: float, label: str) -> None:
     if not PRICE_ELASTICITY_MIN <= value <= PRICE_ELASTICITY_MAX:
         raise ValueError(
-            f"{label} must be between {PRICE_ELASTICITY_MIN} and "
-            f"{PRICE_ELASTICITY_MAX} inclusive."
+            f"{label} must be between {PRICE_ELASTICITY_MIN} and {PRICE_ELASTICITY_MAX} inclusive."
         )
 
 
@@ -231,10 +317,7 @@ def _validate_price_elasticity_series(series: pd.Series, label: str) -> None:
     non_finite = ~np.isfinite(series.astype(float))
     if non_finite.any():
         bad_years = [int(year) for year in series.index[non_finite]]
-        raise ValueError(
-            f"{label} must be finite for all years. "
-            f"Invalid years: {bad_years}."
-        )
+        raise ValueError(f"{label} must be finite for all years. Invalid years: {bad_years}.")
 
     bad = (series < PRICE_ELASTICITY_MIN) | (series > PRICE_ELASTICITY_MAX)
     if bad.any():
@@ -244,6 +327,7 @@ def _validate_price_elasticity_series(series: pd.Series, label: str) -> None:
             f"{PRICE_ELASTICITY_MAX} inclusive for all years. "
             f"Invalid years: {bad_years}."
         )
+
 
 def _load_price_elasticity_series(
     cfg: Mapping[str, object],
@@ -441,6 +525,241 @@ def _extract_reference_demand_twh(
     return _convert_electricity_to_twh(value, unit)
 
 
+def _is_workbook_source(value: object) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and str(value.get("source", "")).strip().lower() == WORKBOOK_SOURCE
+    )
+
+
+def _resolve_workbook_reform_inputs(
+    reform_cfg: Mapping[str, object],
+    base_cfg: Mapping[str, object],
+    *,
+    config_path: Path,
+) -> Mapping[str, object]:
+    """Replace ``source: workbook`` reform entries with workbook-derived scalars."""
+
+    resolved = dict(reform_cfg)
+    for alias in ("shiftable_share", "shiftable_fraction"):
+        if _is_workbook_source(resolved.get(alias)):
+            resolved[alias] = load_workbook_shiftable_share(
+                base_cfg,
+                config_path=config_path,
+            )
+    for alias in ("price_index", "reform_price_index", "regulated_price_index"):
+        value = resolved.get(alias)
+        if _is_workbook_source(value):
+            bound = str(value.get("bound", "")).strip()
+            if not bound:
+                raise ValueError(
+                    f"dynamic_model.reform.{alias} with source: workbook requires "
+                    "'bound' (lower or upper)."
+                )
+            resolved[alias] = load_workbook_reform_price_index(
+                base_cfg,
+                bound=bound,
+                config_path=config_path,
+                scenario_label=str(value.get("scenario", "Scenario 1")),
+            )
+    return resolved
+
+
+def load_workbook_shiftable_share(
+    base_cfg: Mapping[str, object],
+    *,
+    config_path: Path,
+) -> float:
+    """Return regulated (shiftable) demand share from the workbook reference table."""
+
+    raw, country_code, year = _read_workbook_for_country(base_cfg, config_path=config_path)
+    header_row, headers = _reference_table_headers(raw)
+    year_idx = _find_header(headers, "year")
+    total_idx = _find_header(
+        headers,
+        str(base_cfg.get("demand_column", "Total electricity demand")),
+    )
+    regulated_idx = _find_header(headers, "Size of demand subject to shift")
+
+    row = _reference_table_country_row(raw, header_row, country_code, year, year_idx)
+    total_twh = _convert_electricity_to_twh(
+        _float_value(row.iloc[total_idx], "workbook total electricity demand"),
+        str(row.iloc[total_idx + 1]).strip(),
+    )
+    regulated_twh = _convert_electricity_to_twh(
+        _float_value(row.iloc[regulated_idx], "workbook regulated demand"),
+        str(row.iloc[regulated_idx + 1]).strip(),
+    )
+    if total_twh <= 0.0:
+        raise ValueError("Workbook total electricity demand must be positive.")
+    share = regulated_twh / total_twh
+    if not 0.0 <= share <= 1.0:
+        raise ValueError(
+            f"Workbook-derived shiftable share {share:.4f} for {country_code} is outside [0, 1]."
+        )
+    return float(share)
+
+
+def load_workbook_reform_price_index(
+    base_cfg: Mapping[str, object],
+    *,
+    bound: str,
+    config_path: Path,
+    scenario_label: str = "Scenario 1",
+) -> float:
+    """Return P_reform / P_0 for the regulated segment from the workbook tables."""
+
+    bound_norm = str(bound).strip().lower()
+    if bound_norm not in {"lower", "upper"}:
+        raise ValueError("Workbook price_index 'bound' must be 'lower' or 'upper'.")
+
+    raw, country_code, year = _read_workbook_for_country(base_cfg, config_path=config_path)
+
+    header_row, headers = _reference_table_headers(raw)
+    year_idx = _find_header(headers, "year")
+    base_price_idx = _find_header(headers, "Average price (regulated)")
+    base_row = _reference_table_country_row(raw, header_row, country_code, year, year_idx)
+    base_currency, base_price_per_mwh = _normalize_price_per_mwh(
+        _float_value(base_row.iloc[base_price_idx], "workbook base regulated price"),
+        str(base_row.iloc[base_price_idx + 1]).strip(),
+    )
+
+    scenario_row = _find_section_row(raw, scenario_label)
+    scenario_headers = [
+        "" if pd.isna(value) else str(value).strip() for value in raw.iloc[scenario_row]
+    ]
+    normalized_scenario_headers = [_normalize_header(value) for value in scenario_headers]
+    price_idx = _find_header(normalized_scenario_headers, "Price (regulated)")
+
+    bound_label = f"{bound_norm} bound"
+    bound_row = _find_section_row(raw, bound_label, start=scenario_row + 1)
+    scenario_price_row = _section_country_row(raw, bound_row, country_code)
+    scenario_currency, scenario_price_per_mwh = _normalize_price_per_mwh(
+        _float_value(
+            scenario_price_row.iloc[price_idx],
+            f"workbook {bound_norm} bound regulated price",
+        ),
+        str(scenario_price_row.iloc[price_idx + 1]).strip(),
+    )
+
+    if base_currency != scenario_currency:
+        raise ValueError(
+            "Workbook regulated price currencies differ between the reference table "
+            f"({base_currency}) and the {bound_norm} bound table ({scenario_currency}) "
+            f"for {country_code}."
+        )
+    if base_price_per_mwh <= 0.0:
+        raise ValueError("Workbook base regulated price must be positive.")
+    return float(scenario_price_per_mwh / base_price_per_mwh)
+
+
+def _read_workbook_for_country(
+    base_cfg: Mapping[str, object],
+    *,
+    config_path: Path,
+) -> tuple[pd.DataFrame, str, int]:
+    source = _required_text(base_cfg, "source", "dynamic_model.base_demand.source")
+    path = _resolve_path(source, config_path)
+    if path.suffix.lower() not in {".xlsx", ".xls"}:
+        raise ValueError("dynamic_model.base_demand.source must point to an Excel workbook.")
+    country_code = _required_text(
+        base_cfg,
+        "country_code",
+        "dynamic_model.base_demand.country_code",
+    ).upper()
+    year = int(_float_value(base_cfg.get("year"), "dynamic_model.base_demand.year"))
+
+    sheet = base_cfg.get("sheet")
+    sheets = [str(sheet)] if sheet else pd.ExcelFile(path).sheet_names
+    last_error: Exception | None = None
+    for sheet_name in sheets:
+        try:
+            raw = pd.read_excel(path, sheet_name=sheet_name, header=None)
+            _reference_table_headers(raw)  # validates the sheet layout
+            return raw, country_code, year
+        except Exception as exc:  # pragma: no cover - only used across workbook sheets
+            last_error = exc
+            continue
+    message = f"Reference values table not found in {path}."
+    if last_error is not None:
+        message = f"{message} Last error: {last_error}"
+    raise ValueError(message)
+
+
+def _reference_table_headers(raw: pd.DataFrame) -> tuple[int, list[str]]:
+    reference_rows = raw.index[
+        raw.iloc[:, 0].astype(str).str.strip().str.casefold() == "reference values"
+    ].tolist()
+    if not reference_rows:
+        raise ValueError("Reference values table not found.")
+    header_row = int(reference_rows[0]) + 1
+    headers = [
+        _normalize_header("" if pd.isna(value) else str(value).strip())
+        for value in raw.iloc[header_row]
+    ]
+    return header_row, headers
+
+
+def _reference_table_country_row(
+    raw: pd.DataFrame,
+    header_row: int,
+    country_code: str,
+    year: int,
+    year_idx: int,
+) -> pd.Series:
+    data = raw.iloc[header_row + 1 :]
+    country_match = data.iloc[:, 0].astype(str).str.strip().str.upper() == country_code
+    years = pd.to_numeric(data.iloc[:, year_idx], errors="coerce")
+    matches = data[country_match & (years == year)]
+    if matches.empty:
+        raise ValueError(f"Reference values table has no row for {country_code} {year}.")
+    return matches.iloc[0]
+
+
+def _find_section_row(raw: pd.DataFrame, label: str, *, start: int = 0) -> int:
+    target = _normalize_header(label)
+    col0 = raw.iloc[start:, 0].astype(str).map(_normalize_header)
+    matches = col0.index[col0 == target].tolist()
+    if not matches:
+        raise ValueError(f"Workbook section '{label}' not found.")
+    return int(matches[0])
+
+
+def _section_country_row(raw: pd.DataFrame, section_row: int, country_code: str) -> pd.Series:
+    for idx in range(section_row + 1, len(raw)):
+        cell = raw.iloc[idx, 0]
+        if pd.isna(cell) or not str(cell).strip():
+            break
+        if str(cell).strip().upper() == country_code:
+            return raw.iloc[idx]
+    raise ValueError(
+        f"Workbook section starting at row {section_row} has no row for {country_code}."
+    )
+
+
+def _normalize_price_per_mwh(value: float, unit: str) -> tuple[str, float]:
+    """Return (currency, price per MWh) for units like ALL/kWh, cEUR/kWh, EUR/MWh."""
+
+    unit_norm = str(unit).strip().replace(" ", "")
+    match = re.match(r"^(c?)([A-Za-z]{2,4})/([kKmMgG]?[wW][hH])$", unit_norm)
+    if match is None:
+        raise ValueError(f"Unsupported electricity price unit '{unit}'.")
+    centi, currency, denom = match.groups()
+    scale = 0.01 if centi == "c" else 1.0
+    denom_norm = denom.casefold()
+    if denom_norm == "kwh":
+        per_mwh = 1_000.0
+    elif denom_norm == "mwh":
+        per_mwh = 1.0
+    elif denom_norm == "gwh":
+        per_mwh = 0.001
+    elif denom_norm == "wh":
+        per_mwh = 1_000_000.0
+    else:  # pragma: no cover - regex restricts denominators
+        raise ValueError(f"Unsupported electricity price unit '{unit}'.")
+    return currency.upper(), float(value) * scale * per_mwh
+
+
 def _load_driver_series(
     cfg: Mapping[str, object],
     years: Sequence[int],
@@ -486,10 +805,19 @@ def _load_driver_series(
             f"dynamic_model.{label} source must contain '{year_column}' and '{value_column}'."
         )
 
+    raw_values = frame[str(value_column)]
+    todo_mask = raw_values.astype(str).str.strip().str.upper() == TODO_SOURCE
+    if todo_mask.any():
+        todo_years = sorted(int(year) for year in frame.loc[todo_mask, year_column])
+        raise ValueError(
+            f"dynamic_model.{label} source '{path}' contains TODO_SOURCE values for "
+            f"years {todo_years}; provide data before running this scenario."
+        )
+
     mapping = dict(
         zip(
             frame[year_column].astype(int),
-            frame[str(value_column)].astype(float),
+            raw_values.astype(float),
             strict=False,
         )
     )
@@ -655,9 +983,7 @@ def _build_electrification_series(
             )
             values = intercept + slope * income_aligned.to_numpy(dtype=float)
     else:
-        raise ValueError(
-            "dynamic_model.electrification.form must be linear_time or linear_income."
-        )
+        raise ValueError("dynamic_model.electrification.form must be linear_time or linear_income.")
 
     series = pd.Series(values, index=index, dtype=float, name="electrification_share")
     bounds_mode = str(cfg.get("bounds", "validate")).strip().lower()

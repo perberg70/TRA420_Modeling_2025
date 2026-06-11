@@ -33,20 +33,18 @@ from config_paths import apply_results_run_directory, get_results_run_directory 
 LOGGER = logging.getLogger("calc_emissions.run")
 
 
-def _load_country_settings() -> (
-    tuple[
-        Path,
-        str,
-        dict | None,
-        str | None,
-        list[str],
-        list[str],
-        str,
-        Path,
-        str,
-        str,
-    ]
-):
+def _load_country_settings() -> tuple[
+    Path,
+    str,
+    dict | None,
+    str | None,
+    list[str],
+    list[str],
+    str,
+    Path,
+    str,
+    str,
+]:
     config_path = ROOT / "config.yaml"
     config = {}
     if config_path.exists():
@@ -63,12 +61,19 @@ def _load_country_settings() -> (
         str(countries_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
     )
     baseline_mix_case = (
-        str(countries_cfg.get("baseline_mix_case", module_cfg.get("baseline_mix_case", BASE_MIX_CASE)))
-        .strip()
+        str(
+            countries_cfg.get(
+                "baseline_mix_case", module_cfg.get("baseline_mix_case", BASE_MIX_CASE)
+            )
+        ).strip()
         or BASE_MIX_CASE
     )
     delta_mode = (
-        str(countries_cfg.get("delta_baseline_mode", module_cfg.get("delta_baseline_mode", "per_mix")))
+        str(
+            countries_cfg.get(
+                "delta_baseline_mode", module_cfg.get("delta_baseline_mode", "per_mix")
+            )
+        )
         .strip()
         .lower()
         or "per_mix"
@@ -115,8 +120,7 @@ def _resolve_config_path(args: argparse.Namespace, directory: Path, pattern: str
         if not path.exists():
             available = _available_countries(directory, pattern)
             raise FileNotFoundError(
-                f"Country config '{country_key}' not found in {directory}. "
-                f"Available: {available}."
+                f"Country config '{country_key}' not found in {directory}. Available: {available}."
             )
         return path
 

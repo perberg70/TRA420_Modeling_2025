@@ -4,12 +4,15 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from calc_emissions.calculator import run_from_config
 from calc_emissions.demand_model import (
+    build_dynamic_demand_components,
     build_dynamic_demand_series,
     load_base_electricity_demand_twh,
+    load_workbook_reform_price_index,
+    load_workbook_shiftable_share,
     validate_elasticities,
 )
-from calc_emissions.calculator import run_from_config
 
 
 def _write_reference_workbook(path: Path, *, value: float = 30021.0, unit: str = "GWh") -> None:
@@ -19,6 +22,42 @@ def _write_reference_workbook(path: Path, *, value: float = 30021.0, unit: str =
         ["TST", 2023, value, unit],
     ]
     pd.DataFrame(rows).to_excel(path, index=False, header=False)
+
+
+def _write_reform_workbook(path: Path) -> None:
+    """Workbook mimicking the Electricity_OECD.xlsx layout with reform tables."""
+
+    rows = [
+        ["Reference values", None, None, None, None, None, None, None],
+        [
+            None,
+            "year",
+            "Total electricity demand",
+            "unit",
+            "Size of demand subject to shift",
+            "unit",
+            "Average price (regulated)",
+            "unit",
+        ],
+        ["TST", 2023, 100.0, "TWh", 40.0, "TWh", 8.0, "cEUR/kWh"],
+        [None, None, None, None, None, None, None, None],
+        ["Scenario 1 ", None, None, None, "Price (regulated)", "unit", None, None],
+        ["Lower bound ", None, None, None, None, None, None, None],
+        ["TST", None, None, None, 96.0, "EUR/MWh", None, None],
+        [None, None, None, None, None, None, None, None],
+        ["Upper bound", None, None, None, None, None, None, None],
+        ["TST", None, None, None, 160.0, "EUR/MWh", None, None],
+    ]
+    pd.DataFrame(rows).to_excel(path, index=False, header=False)
+
+
+def _reform_base_cfg(workbook: Path) -> dict:
+    return {
+        "source": str(workbook),
+        "country_code": "TST",
+        "demand_column": "Total electricity demand",
+        "year": 2023,
+    }
 
 
 @pytest.fixture
@@ -113,12 +152,8 @@ def test_dynamic_demand_uses_excel_base_and_elasticity_formula(tmp_path: Path):
         config_path=tmp_path / "config.yaml",
     )
 
-    expected_2025 = 30.021 * (0.52 / 0.5) * (110.0 / 100.0) ** 1.1 * (
-        90.0 / 100.0
-    ) ** -0.4
-    expected_2030 = 30.021 * (0.57 / 0.5) * (120.0 / 100.0) ** 1.1 * (
-        110.0 / 100.0
-    ) ** -0.4
+    expected_2025 = 30.021 * (0.52 / 0.5) * (110.0 / 100.0) ** 1.1 * (90.0 / 100.0) ** -0.4
+    expected_2030 = 30.021 * (0.57 / 0.5) * (120.0 / 100.0) ** 1.1 * (110.0 / 100.0) ** -0.4
     assert demand.loc[2025] == pytest.approx(expected_2025)
     assert demand.loc[2030] == pytest.approx(expected_2030)
 
@@ -151,6 +186,146 @@ def test_dynamic_demand_supports_linear_income_electrification(tmp_path: Path):
     )
 
     assert demand.loc[2025] == pytest.approx(30.021 * (0.42 / 0.4) * 1.1)
+
+
+def test_dynamic_demand_population_uses_per_capita_income_and_scales_demand(tmp_path: Path):
+    workbook = tmp_path / "Electricity_OECD.xlsx"
+    _write_reference_workbook(workbook)
+    cfg = {
+        "base_demand": {
+            "source": str(workbook),
+            "country_code": "TST",
+            "demand_column": "Total electricity demand",
+            "year": 2023,
+        },
+        # Total GDP grows 21%, population 10% => GDP per capita grows 10%.
+        "income": {"values": {2023: 100.0, 2025: 121.0}},
+        "population": {"values": {2023: 1.0, 2025: 1.1}},
+        "price": {"values": {2023: 100.0, 2025: 100.0}},
+        "electrification": {"form": "linear_time", "A": 0.5, "B": 0.0},
+        "income_elasticity": 1.0,
+        "price_elasticity": -0.2,
+    }
+
+    demand = build_dynamic_demand_series(
+        cfg,
+        [2025],
+        config_path=tmp_path / "config.yaml",
+    )
+
+    expected = 30.021 * 1.1 * (110.0 / 100.0) ** 1.0
+    assert demand.loc[2025] == pytest.approx(expected)
+
+
+def test_dynamic_demand_components_returns_electrification_series(tmp_path: Path):
+    workbook = tmp_path / "Electricity_OECD.xlsx"
+    _write_reference_workbook(workbook)
+    cfg = {
+        "base_demand": {
+            "source": str(workbook),
+            "country_code": "TST",
+            "demand_column": "Total electricity demand",
+            "year": 2023,
+        },
+        "income": {"values": {2023: 100.0, 2025: 100.0, 2030: 100.0}},
+        "price": {"values": {2023: 100.0, 2025: 100.0, 2030: 100.0}},
+        "electrification": {"form": "linear_time", "A": 0.5, "B": 0.01},
+        "income_elasticity": 1.0,
+        "price_elasticity": -0.2,
+    }
+
+    demand, electrification = build_dynamic_demand_components(
+        cfg,
+        [2025, 2030],
+        config_path=tmp_path / "config.yaml",
+    )
+
+    assert electrification.loc[2025] == pytest.approx(0.52)
+    assert electrification.loc[2030] == pytest.approx(0.57)
+    assert demand.loc[2025] == pytest.approx(30.021 * (0.52 / 0.5))
+
+
+def test_load_workbook_shiftable_share_and_price_index(tmp_path: Path):
+    workbook = tmp_path / "Electricity_OECD.xlsx"
+    _write_reform_workbook(workbook)
+    base_cfg = _reform_base_cfg(workbook)
+    config_path = tmp_path / "config.yaml"
+
+    share = load_workbook_shiftable_share(base_cfg, config_path=config_path)
+    assert share == pytest.approx(0.4)
+
+    # 8.0 cEUR/kWh == 80 EUR/MWh, so unit conversion must be handled.
+    lower = load_workbook_reform_price_index(base_cfg, bound="lower", config_path=config_path)
+    upper = load_workbook_reform_price_index(base_cfg, bound="upper", config_path=config_path)
+    assert lower == pytest.approx(96.0 / 80.0)
+    assert upper == pytest.approx(160.0 / 80.0)
+
+
+def test_two_stage_reform_with_workbook_inputs_and_default_post_reform_price(
+    tmp_path: Path,
+):
+    workbook = tmp_path / "Electricity_OECD.xlsx"
+    _write_reform_workbook(workbook)
+    cfg = {
+        "mode": "two_stage_reform",
+        "base_year": 2023,
+        "reform_year": 2027,
+        "base_demand": _reform_base_cfg(workbook),
+        "reform": {
+            "shiftable_share": {"source": "workbook"},
+            "price_index": {"source": "workbook", "bound": "lower"},
+            "price_elasticity": -0.5,
+        },
+        "income": {"values": {2023: 100.0, 2027: 100.0, 2030: 100.0}},
+        # post_reform_price intentionally omitted: defaults to constant index 1.0.
+        "electrification": {"form": "linear_time", "A": 0.5, "B": 0.0},
+        "income_elasticity": 1.0,
+        "post_reform_price_elasticity": {"value": -0.4},
+    }
+
+    demand = build_dynamic_demand_series(
+        cfg,
+        [2025, 2027, 2030],
+        config_path=tmp_path / "config.yaml",
+    )
+
+    expected_reform = 60.0 + 40.0 * (96.0 / 80.0) ** -0.5
+    assert demand.loc[2025] == pytest.approx(100.0)
+    assert demand.loc[2027] == pytest.approx(expected_reform)
+    assert demand.loc[2030] == pytest.approx(expected_reform)
+
+
+def test_two_stage_reform_population_scales_post_reform_demand(tmp_path: Path):
+    workbook = tmp_path / "Electricity_OECD.xlsx"
+    _write_reform_workbook(workbook)
+    cfg = {
+        "mode": "two_stage_reform",
+        "base_year": 2023,
+        "reform_year": 2027,
+        "base_demand": _reform_base_cfg(workbook),
+        "reform": {
+            "shiftable_share": {"source": "workbook"},
+            "price_index": {"source": "workbook", "bound": "lower"},
+            "price_elasticity": -0.5,
+        },
+        # Total GDP and population both grow 10% => GDP per capita is flat,
+        # so post-reform growth comes from population scaling alone.
+        "income": {"values": {2023: 100.0, 2027: 100.0, 2030: 110.0}},
+        "population": {"values": {2023: 1.0, 2027: 1.0, 2030: 1.1}},
+        "electrification": {"form": "linear_time", "A": 0.5, "B": 0.0},
+        "income_elasticity": 1.0,
+        "post_reform_price_elasticity": {"value": -0.4},
+    }
+
+    demand = build_dynamic_demand_series(
+        cfg,
+        [2027, 2030],
+        config_path=tmp_path / "config.yaml",
+    )
+
+    expected_reform = 60.0 + 40.0 * (96.0 / 80.0) ** -0.5
+    assert demand.loc[2027] == pytest.approx(expected_reform)
+    assert demand.loc[2030] == pytest.approx(expected_reform * 1.1)
 
 
 def test_two_stage_reform_holds_pre_reform_years_at_workbook_base_and_derives_segments(
