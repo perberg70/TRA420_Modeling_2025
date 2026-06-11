@@ -142,12 +142,19 @@ def _load_country_settings() -> (
         str(countries_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
     )
     baseline_mix_case = (
-        str(countries_cfg.get("baseline_mix_case", module_cfg.get("baseline_mix_case", BASE_MIX_CASE)))
-        .strip()
+        str(
+            countries_cfg.get(
+                "baseline_mix_case", module_cfg.get("baseline_mix_case", BASE_MIX_CASE)
+            )
+        ).strip()
         or BASE_MIX_CASE
     )
     delta_mode = (
-        str(countries_cfg.get("delta_baseline_mode", module_cfg.get("delta_baseline_mode", "per_mix")))
+        str(
+            countries_cfg.get(
+                "delta_baseline_mode", module_cfg.get("delta_baseline_mode", "per_mix")
+            )
+        )
         .strip()
         .lower()
         or "per_mix"
@@ -263,7 +270,9 @@ def _build_aggregated_results(
     combined: Dict[str, EmissionScenarioResult] = {}
     for (mix_case, demand_case), scenario in aggregated.items():
         if delta_mode == "global":
-            baseline_co2 = baseline_global.total_emissions_mt.get("co2") if baseline_global else None
+            baseline_co2 = (
+                baseline_global.total_emissions_mt.get("co2") if baseline_global else None
+            )
             totals = scenario.total_emissions_mt.get("co2")
             if baseline_co2 is not None and totals is not None:
                 idx = baseline_co2.index.union(totals.index)

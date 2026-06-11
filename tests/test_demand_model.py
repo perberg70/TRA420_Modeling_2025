@@ -4,12 +4,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from calc_emissions.calculator import run_from_config
 from calc_emissions.demand_model import (
     build_dynamic_demand_series,
     load_base_electricity_demand_twh,
     validate_elasticities,
 )
-from calc_emissions.calculator import run_from_config
 
 
 def _write_reference_workbook(path: Path, *, value: float = 30021.0, unit: str = "GWh") -> None:

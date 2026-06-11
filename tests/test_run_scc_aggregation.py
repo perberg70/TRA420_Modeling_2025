@@ -113,6 +113,7 @@ def _build_config(tmp_path: Path, include_horizon: bool) -> dict:
     return config
 
 
+@pytest.mark.network
 @pytest.mark.parametrize("include_horizon", [False, True])
 def test_run_scc_aggregation_horizon(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, include_horizon: bool, capsys
@@ -136,6 +137,7 @@ def test_run_scc_aggregation_horizon(
         assert set(df["year"].astype(int)) == set(range(2025, 2031))
 
 
+@pytest.mark.network
 def test_run_scc_pulse_outputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     config = _build_config(tmp_path, include_horizon=True)
     config["economic_module"]["methods"] = {
@@ -182,6 +184,7 @@ def test_run_scc_pulse_outputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     assert set(damage_df["year"].astype(int)) == set(range(2025, 2031))
 
 
+@pytest.mark.network
 def test_run_scc_skip_damages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     config = _build_config(tmp_path, include_horizon=True)
     monkeypatch.setattr(run_scc, "_load_config", lambda: config)
@@ -195,6 +198,7 @@ def test_run_scc_skip_damages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     assert not any(damage_dir.glob("damages_*.csv"))
 
 
+@pytest.mark.network
 def test_run_scc_custom_damage_requires_terms(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ):
@@ -209,6 +213,7 @@ def test_run_scc_custom_damage_requires_terms(
     assert "custom_terms" in capsys.readouterr().err.lower()
 
 
+@pytest.mark.network
 def test_run_scc_custom_damage_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     config = _build_config(tmp_path, include_horizon=True)
     config["economic_module"]["damage_function"] = {
