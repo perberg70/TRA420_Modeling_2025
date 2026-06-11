@@ -2314,12 +2314,14 @@ def _plot_absolute_emissions_country_tiles(
         figsize=(ncols * 4.2, nrows * 3.2),
         sharex=True,
         sharey=False,
-        layout="constrained",
+        layout="constrained"
     )
     axes_flat = np.atleast_1d(axes).ravel()
     legend_handles: dict[str, object] = {}
     baseline_handles: dict[str, object] = {}
 
+    # The subplot grid may contain more axes than countries; leftovers are
+    # switched off after the loop, so truncation here is intentional.
     for ax, country in zip(axes_flat, countries, strict=False):
         mix_map = country_data.get(country, {})
         plotted = False

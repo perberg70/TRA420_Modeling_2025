@@ -24,6 +24,7 @@ def _build_model() -> FAIR:
     return model
 
 
+@pytest.mark.network
 def test_load_and_apply_calibration(tmp_path: Path):
     cfg = {
         "enabled": True,
