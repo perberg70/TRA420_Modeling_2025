@@ -63,12 +63,19 @@ def _load_country_settings() -> (
         str(countries_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
     )
     baseline_mix_case = (
-        str(countries_cfg.get("baseline_mix_case", module_cfg.get("baseline_mix_case", BASE_MIX_CASE)))
-        .strip()
+        str(
+            countries_cfg.get(
+                "baseline_mix_case", module_cfg.get("baseline_mix_case", BASE_MIX_CASE)
+            )
+        ).strip()
         or BASE_MIX_CASE
     )
     delta_mode = (
-        str(countries_cfg.get("delta_baseline_mode", module_cfg.get("delta_baseline_mode", "per_mix")))
+        str(
+            countries_cfg.get(
+                "delta_baseline_mode", module_cfg.get("delta_baseline_mode", "per_mix")
+            )
+        )
         .strip()
         .lower()
         or "per_mix"

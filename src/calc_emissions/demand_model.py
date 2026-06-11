@@ -381,7 +381,11 @@ def load_base_electricity_demand_twh(
         raise ValueError("dynamic_model.base_demand.source must point to an Excel workbook.")
 
     sheet = cfg.get("sheet")
-    sheets = [str(sheet)] if sheet else pd.ExcelFile(path).sheet_names
+    if sheet:
+        sheets = [str(sheet)]
+    else:
+        with pd.ExcelFile(path) as workbook:
+            sheets = list(workbook.sheet_names)
     last_error: Exception | None = None
     for sheet_name in sheets:
         try:

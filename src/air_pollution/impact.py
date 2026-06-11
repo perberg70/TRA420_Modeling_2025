@@ -697,7 +697,8 @@ def _build_death_summary(
 
     df = (
         percent_change.sort_index()
-        .astype(float, copy=True)
+        .astype(float)
+        .copy()
         .to_frame(name="percent_change_mortality")
     )
     df["baseline_deaths_per_year"] = baseline_deaths_per_year
