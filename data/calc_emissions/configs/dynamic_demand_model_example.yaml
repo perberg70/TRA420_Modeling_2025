@@ -30,11 +30,15 @@ calc_emissions:
           country_column: country_code
           country_code: TODO_SOURCE
           value_column: value
+          filters:
+            scenario: SSP2
         population:
           source: data/calc_emissions/demand_drivers/population.csv
           country_column: country_code
           country_code: TODO_SOURCE
           value_column: value
+          filters:
+            scenario: SSP2
         price:
           source: TODO_SOURCE
           value_column: TODO_SOURCE
@@ -60,11 +64,15 @@ calc_emissions:
           country_column: country_code
           country_code: TODO_SOURCE
           value_column: value
+          filters:
+            scenario: SSP2
         population:
           source: data/calc_emissions/demand_drivers/population.csv
           country_column: country_code
           country_code: TODO_SOURCE
           value_column: value
+          filters:
+            scenario: SSP2
         price:
           source: TODO_SOURCE
           value_column: TODO_SOURCE
@@ -106,11 +114,15 @@ calc_emissions:
           country_column: country_code
           country_code: TODO_SOURCE
           value_column: value
+          filters:
+            scenario: SSP2
         population:
           source: data/calc_emissions/demand_drivers/population.csv
           country_column: country_code
           country_code: TODO_SOURCE
           value_column: value
+          filters:
+            scenario: SSP2
         # post_reform_price is optional. When omitted the homogeneous
         # post-reform price is held constant at the reform-year level
         # (index 1.0 in every year). Provide a path to override:

@@ -217,6 +217,87 @@ def test_dynamic_demand_population_uses_per_capita_income_and_scales_demand(tmp_
     assert demand.loc[2025] == pytest.approx(expected)
 
 
+def test_dynamic_demand_filters_driver_sources(tmp_path: Path):
+    workbook = tmp_path / "Electricity_OECD.xlsx"
+    _write_reference_workbook(workbook)
+    income_path = tmp_path / "income.csv"
+    pd.DataFrame(
+        {
+            "country_code": ["TST", "TST", "TST", "TST"],
+            "scenario": ["SSP1", "SSP1", "SSP2", "SSP2"],
+            "year": [2023, 2025, 2023, 2025],
+            "value": [50.0, 55.0, 100.0, 120.0],
+        }
+    ).to_csv(income_path, index=False)
+    cfg = {
+        "base_demand": {
+            "source": str(workbook),
+            "country_code": "TST",
+            "demand_column": "Total electricity demand",
+            "year": 2023,
+        },
+        "income": {
+            "source": str(income_path),
+            "country_column": "country_code",
+            "country_code": "TST",
+            "value_column": "value",
+            "filters": {"scenario": "SSP2"},
+        },
+        "price": {"values": {2023: 100.0, 2025: 100.0}},
+        "electrification": {"form": "linear_time", "A": 0.5, "B": 0.0},
+        "income_elasticity": 1.0,
+        "price_elasticity": -0.2,
+    }
+
+    demand = build_dynamic_demand_series(
+        cfg,
+        [2025],
+        config_path=tmp_path / "config.yaml",
+    )
+
+    assert demand.loc[2025] == pytest.approx(30.021 * 1.2)
+
+
+def test_dynamic_demand_rejects_duplicate_driver_years_after_filtering(tmp_path: Path):
+    workbook = tmp_path / "Electricity_OECD.xlsx"
+    _write_reference_workbook(workbook)
+    income_path = tmp_path / "income.csv"
+    pd.DataFrame(
+        {
+            "country_code": ["TST", "TST", "TST"],
+            "scenario": ["SSP2", "SSP2", "SSP2"],
+            "year": [2023, 2025, 2025],
+            "value": [100.0, 120.0, 121.0],
+        }
+    ).to_csv(income_path, index=False)
+    cfg = {
+        "base_demand": {
+            "source": str(workbook),
+            "country_code": "TST",
+            "demand_column": "Total electricity demand",
+            "year": 2023,
+        },
+        "income": {
+            "source": str(income_path),
+            "country_column": "country_code",
+            "country_code": "TST",
+            "value_column": "value",
+            "filters": {"scenario": "SSP2"},
+        },
+        "price": {"values": {2023: 100.0, 2025: 100.0}},
+        "electrification": {"form": "linear_time", "A": 0.5, "B": 0.0},
+        "income_elasticity": 1.0,
+        "price_elasticity": -0.2,
+    }
+
+    with pytest.raises(ValueError, match="duplicate rows.*2025"):
+        build_dynamic_demand_series(
+            cfg,
+            [2025],
+            config_path=tmp_path / "config.yaml",
+        )
+
+
 def test_dynamic_demand_components_returns_electrification_series(tmp_path: Path):
     workbook = tmp_path / "Electricity_OECD.xlsx"
     _write_reference_workbook(workbook)

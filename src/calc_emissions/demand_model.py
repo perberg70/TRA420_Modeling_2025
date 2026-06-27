@@ -802,6 +802,18 @@ def _load_driver_series(
             frame[str(country_column)].astype(str).str.strip().str.upper()
             == str(country_code).strip().upper()
         ]
+    filters = cfg.get("filters")
+    if isinstance(filters, Mapping):
+        for column, expected in filters.items():
+            column_name = str(column)
+            if column_name not in frame.columns:
+                raise ValueError(
+                    f"dynamic_model.{label} source is missing filter column '{column_name}'."
+                )
+            frame = frame[
+                frame[column_name].astype(str).str.strip().str.casefold()
+                == str(expected).strip().casefold()
+            ]
     if frame.empty:
         raise ValueError(f"dynamic_model.{label} source has no matching rows.")
     if year_column not in frame.columns or str(value_column) not in frame.columns:
@@ -818,9 +830,17 @@ def _load_driver_series(
             f"years {todo_years}; provide data before running this scenario."
         )
 
+    source_years = frame[year_column].astype(int)
+    duplicate_years = sorted(source_years[source_years.duplicated()].unique())
+    if duplicate_years:
+        raise ValueError(
+            f"dynamic_model.{label} source '{path}' contains duplicate rows for "
+            f"years {duplicate_years}; add filters to select one row per year."
+        )
+
     mapping = dict(
         zip(
-            frame[year_column].astype(int),
+            source_years,
             raw_values.astype(float),
             strict=False,
         )
