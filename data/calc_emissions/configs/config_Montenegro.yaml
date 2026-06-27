@@ -36,11 +36,15 @@ calc_emissions:
           country_column: country_code
           country_code: MNE
           value_column: value
+          filters:
+            scenario: SSP2
         population:
           source: data/calc_emissions/demand_drivers/population.csv
           country_column: country_code
           country_code: MNE
           value_column: value
+          filters:
+            scenario: SSP2
         # post_reform_price omitted: held constant at the reform-year price
         # (index 1.0) until a post-reform price projection is supplied.
         electrification:
@@ -77,11 +81,15 @@ calc_emissions:
           country_column: country_code
           country_code: MNE
           value_column: value
+          filters:
+            scenario: SSP2
         population:
           source: data/calc_emissions/demand_drivers/population.csv
           country_column: country_code
           country_code: MNE
           value_column: value
+          filters:
+            scenario: SSP2
         # post_reform_price omitted: held constant at the reform-year price
         # (index 1.0) until a post-reform price projection is supplied.
         electrification:
