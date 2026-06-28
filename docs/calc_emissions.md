@@ -176,6 +176,15 @@ Recommended sensitivity setup:
    one scalar elasticity per demand case, so ranges should be represented as
    multiple scenarios rather than as a list inside one scenario.
 5. Keep all price elasticities inside the enforced range `-0.8 <= C <= -0.2`;
+1. Keep `base_demand.source` pointed at `data/calc_emissions/Electricity_OECD.xlsx`
+   so the workbook, not `energy_demand`/flat YAML values, anchors the 2023 TWh.
+2. Use the same GDP/population scenario for a first pass, typically `SSP2`, then
+   repeat with other SSPs if socioeconomic uncertainty is in scope.
+3. Run an elasticity grid by creating named demand cases, for example
+   `dyn_B1p0_Cm0p2`, `dyn_B1p2_Cm0p4`, and `dyn_B1p5_Cm0p8`. The runtime expects
+   one scalar elasticity per demand case, so ranges should be represented as
+   multiple scenarios rather than as a list inside one scenario.
+4. Keep all price elasticities inside the enforced range `-0.8 <= C <= -0.2`;
    use `-0.2` as the low-response/high-demand case and `-0.8` as the
    high-response/low-demand case when prices rise. Income elasticity must be
    `>= 1.0`; use at least a low/central/high set such as `1.0`, `1.2`, and `1.5`
@@ -193,6 +202,18 @@ demand_scenarios:
       mode: two_stage_reform
       base_year: 2023
       reform_year: 2027
+5. Until a post-reform electricity price path is available, omit
+   `post_reform_price` in `mode: two_stage_reform` so the post-reform price index
+   is held constant after the one-time reform shock.
+
+Minimal total-demand example using the bundled driver files:
+
+```yaml
+demand_scenarios:
+  dyn_B1p2_Cm0p4:
+    dynamic_model:
+      mode: total
+      base_year: 2023
       base_demand:
         source: data/calc_emissions/Electricity_OECD.xlsx
         country_code: SRB
@@ -220,6 +241,10 @@ demand_scenarios:
         filters:
           scenario: SSP2
       # post_reform_price omitted: held at the 2027 post-shock price index.
+      price:
+        values:
+          2023: 1.0
+          2100: 1.0
       electrification:
         form: linear_time
         A: 1.0
@@ -227,6 +252,7 @@ demand_scenarios:
       income_elasticity: 1.2
       post_reform_price_elasticity:
         value: -0.4
+      price_elasticity: -0.4
 ```
 
 The optional `mode: two_stage_reform` represents the subsidy-removal transition
