@@ -148,6 +148,87 @@ Values still set to `TODO_SOURCE` are rejected at runtime with a clear error,
 so scenarios never silently run on placeholders. Sparse year grids are
 interpolated linearly across the model horizon.
 
+
+#### Recommended GDP/population elasticity workflow
+
+To disregard the flat demand trajectory, define each modeled demand case with a
+`dynamic_model` block instead of a static `values` map. Use
+`data/calc_emissions/demand_drivers/gdp.csv` as total GDP and
+`data/calc_emissions/demand_drivers/population.csv` as population; when both are
+present, the model calculates GDP per capita internally and separately applies
+the population scaling term. Select a single SSP/country row set with
+`filters.scenario` and `country_code`, otherwise duplicate years are rejected.
+
+Recommended sensitivity setup:
+
+1. For subsidy/price-response scenarios, use `mode: two_stage_reform` with
+   `reform_year: 2027`. The modeled demand input for emissions from 2027 onward
+   is then `D_reform`, i.e. the workbook base demand after the 2027
+   price/response shock has been applied; pre-2027 years are only carried as the
+   unchanged workbook base demand for continuity.
+2. Keep `base_demand.source` pointed at `data/calc_emissions/Electricity_OECD.xlsx`
+   so the workbook, not `energy_demand`/flat YAML values, anchors the pre-shock
+   reference demand used to calculate the 2027 post-shock demand.
+3. Use the same GDP/population scenario for a first pass, typically `SSP2`, then
+   repeat with other SSPs if socioeconomic uncertainty is in scope.
+4. Run an elasticity grid by creating named demand cases, for example
+   `dyn_B1p0_Cm0p2`, `dyn_B1p2_Cm0p4`, and `dyn_B1p5_Cm0p8`. The runtime expects
+   one scalar elasticity per demand case, so ranges should be represented as
+   multiple scenarios rather than as a list inside one scenario.
+5. Keep all price elasticities inside the enforced range `-0.8 <= C <= -0.2`;
+   use `-0.2` as the low-response/high-demand case and `-0.8` as the
+   high-response/low-demand case when prices rise. Income elasticity must be
+   `>= 1.0`; use at least a low/central/high set such as `1.0`, `1.2`, and `1.5`
+   unless a country-specific estimate is available.
+6. Until a post-reform electricity price path is available, omit
+   `post_reform_price` in `mode: two_stage_reform` so the post-reform price index
+   is held constant after the one-time reform shock.
+
+Minimal 2027 post-shock example using the bundled driver files:
+
+```yaml
+demand_scenarios:
+  dyn_2027_postshock_B1p2_Cm0p4:
+    dynamic_model:
+      mode: two_stage_reform
+      base_year: 2023
+      reform_year: 2027
+      base_demand:
+        source: data/calc_emissions/Electricity_OECD.xlsx
+        country_code: SRB
+        demand_column: Total electricity demand
+        year: 2023
+      reform:
+        shiftable_share:
+          source: workbook
+        price_index:
+          source: workbook
+          bound: lower
+        price_elasticity: -0.4
+      income:
+        source: data/calc_emissions/demand_drivers/gdp.csv
+        country_column: country_code
+        country_code: SRB
+        value_column: value
+        filters:
+          scenario: SSP2
+      population:
+        source: data/calc_emissions/demand_drivers/population.csv
+        country_column: country_code
+        country_code: SRB
+        value_column: value
+        filters:
+          scenario: SSP2
+      # post_reform_price omitted: held at the 2027 post-shock price index.
+      electrification:
+        form: linear_time
+        A: 1.0
+        slope: 0.0
+      income_elasticity: 1.2
+      post_reform_price_elasticity:
+        value: -0.4
+```
+
 The optional `mode: two_stage_reform` represents the subsidy-removal transition
 as a one-time segmented price shock, then switches to a homogeneous post-reform
 market. Use the canonical keys `reform`, `shiftable_share`, `price_index`,
