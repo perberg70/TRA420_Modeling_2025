@@ -148,6 +148,172 @@ Values still set to `TODO_SOURCE` are rejected at runtime with a clear error,
 so scenarios never silently run on placeholders. Sparse year grids are
 interpolated linearly across the model horizon.
 
+
+#### Recommended GDP/population elasticity workflow
+
+To disregard the flat demand trajectory, define each modeled demand case with a
+`dynamic_model` block instead of a static `values` map. Use
+`data/calc_emissions/demand_drivers/gdp.csv` as total GDP and
+`data/calc_emissions/demand_drivers/population.csv` as population; when both are
+present, the model calculates GDP per capita internally and separately applies
+the population scaling term. Select a single SSP/country row set with
+`filters.scenario` and `country_code`, otherwise duplicate years are rejected.
+
+Recommended sensitivity setup:
+
+1. For subsidy/price-response scenarios, use `mode: two_stage_reform` with
+   `reform_year: 2027`. The modeled demand input for emissions from 2027 onward
+   is then `D_reform`, i.e. the workbook base demand after the 2027
+   price/response shock has been applied; pre-2027 years are only carried as the
+   unchanged workbook base demand for continuity.
+2. Keep `base_demand.source` pointed at `data/calc_emissions/Electricity_OECD.xlsx`
+   so the workbook, not `energy_demand`/flat YAML values, anchors the pre-shock
+   reference demand used to calculate the 2027 post-shock demand.
+3. Use the same GDP/population scenario for a first pass, typically `SSP2`, then
+   repeat with other SSPs if socioeconomic uncertainty is in scope.
+4. Run an elasticity grid by creating named demand cases, for example
+   `dyn_B1p0_Cm0p2`, `dyn_B1p2_Cm0p4`, and `dyn_B1p5_Cm0p8`. The runtime expects
+   one scalar elasticity per demand case, so ranges should be represented as
+   multiple scenarios rather than as a list inside one scenario.
+5. Keep **price** elasticities inside the enforced range `-0.8 <= C <= -0.2`;
+   in the bundled country configs, `scen1_upper` uses the `-0.2` endpoint and
+   `scen1_lower` uses the `-0.8` endpoint for both the 2027 reform shock and
+   the post-reform price elasticity. Do not use this negative range for
+   `income_elasticity`: income elasticity is a separate GDP-response parameter
+   and must be `>= 1.0` under the current model validation. Use at least a
+   low/central/high income-elasticity set such as `1.0`, `1.2`, and `1.5` unless
+   a country-specific estimate is available.
+6. Until a post-reform electricity price path is available, omit
+   `post_reform_price` in `mode: two_stage_reform` so the post-reform price index
+   is held constant after the one-time reform shock.
+
+Minimal 2027 post-shock example using the bundled driver files:
+
+```yaml
+demand_scenarios:
+  dyn_2027_postshock_B1p2_Cm0p4:
+    dynamic_model:
+      mode: two_stage_reform
+      base_year: 2023
+      reform_year: 2027
+      base_demand:
+        source: data/calc_emissions/Electricity_OECD.xlsx
+        country_code: SRB
+        demand_column: Total electricity demand
+        year: 2023
+      reform:
+        shiftable_share:
+          source: workbook
+        price_index:
+          source: workbook
+          bound: lower
+        price_elasticity: -0.4
+      income:
+        source: data/calc_emissions/demand_drivers/gdp.csv
+        country_column: country_code
+        country_code: SRB
+        value_column: value
+        filters:
+          scenario: SSP2
+      population:
+        source: data/calc_emissions/demand_drivers/population.csv
+        country_column: country_code
+        country_code: SRB
+        value_column: value
+        filters:
+          scenario: SSP2
+      # post_reform_price omitted: held at the 2027 post-shock price index.
+      electrification:
+        form: linear_time
+        A: 1.0
+        slope: 0.0
+      income_elasticity: 1.2
+      post_reform_price_elasticity:
+        value: -0.4
+```
+
+#### Research-backed method for closing remaining dynamic-demand TODOs
+
+The remaining dynamic-demand placeholders should be closed with a transparent
+scenario-calibration method rather than a single unreferenced point estimate.
+Recommended approach for WB6 countries:
+
+1. **Keep GDP and population exogenous from SSP drivers.** The IIASA SSP
+   database is designed for harmonised GDP and population assumptions across SSP
+   narratives, and IIASA recommends using GDP projections to test sensitivity to
+   different GDP assumptions. This supports the current `income` + `population`
+   driver structure, where total GDP is converted to GDP per capita when
+   population is supplied.
+2. **Calibrate income elasticity as a sensitivity band, not a fixed truth.**
+   Cross-country electricity-demand literature commonly estimates economy-wide
+   income/GDP elasticity with long-panel methods that account for country
+   heterogeneity and dynamic adjustment. Because published ranges vary by income
+   level, sector, and period, use a WB6 screening band of `1.0`, `1.2`, and
+   `1.5` only as a scenario assumption; if historical WB6 electricity-demand,
+   tariff, GDP, and weather data are assembled, replace these with a panel
+   error-correction or autoregressive distributed lag estimate.
+3. **Use the configured price-elasticity endpoints as reform sensitivities.**
+   The bundled configs now set `scen1_upper` to `-0.2` and `scen1_lower` to
+   `-0.8`, matching the model's enforced range. This should be documented as a
+   modelling convention, not an empirical claim that every WB6 country has the
+   same elasticity.
+4. **Close electrification TODOs from sectoral end-use evidence.** IEA analysis
+   treats electrification as a structural driver of electricity growth across
+   appliances, cooling, industry, transport, and heating, while also noting that
+   electrification can reduce final energy demand because electric technologies
+   are often more efficient than fossil alternatives. For this model, use one of
+   three defensible electrification tiers until country-specific end-use data are
+   available:
+   - **Neutral tier:** `A: 1.0`, `slope: 0.0`. Use this when GDP/population and
+     price response should be isolated and electrification should not add a
+     separate multiplier.
+   - **Policy tier:** choose `A` from the best available current electricity
+     share of final energy or end-use electrification proxy, then set `slope` so
+     the share reaches the national NECP or similar policy target by the target
+     year.
+   - **Benchmark tier:** if WB6 policy targets are unavailable or inconsistent,
+     benchmark `A` and `slope` to a comparable European transition-economy group,
+     then test low/central/high slopes.
+5. **Validate against historical demand before accepting assumptions.** The
+   World Bank's Western Balkans energy-sector modelling used detailed energy
+   balances and GDP-based demand forecasting for WB6, making historical energy
+   balances a suitable validation target. After replacing TODOs, compare modeled
+   2027--2035 electricity demand growth against recent historical demand growth
+   and against any NECP or utility forecast available for the country.
+
+Recommended initial TODO replacements for a first runnable sensitivity set:
+
+| Placeholder | Parameter meaning | Neutral/isolation case | Central transition case | High electrification case |
+| --- | --- | ---: | ---: | ---: |
+| `reform.price_elasticity` / `post_reform_price_elasticity.value` | price response `C`; use the negative endpoint range requested for price elasticity | `-0.2` (`scen1_upper`) | optional midpoint, e.g. `-0.4` | `-0.8` (`scen1_lower`) |
+| `income_elasticity` | GDP/income response `B`; separate from price elasticity | `1.0` | `1.2` | `1.5` |
+| `electrification.A` | electrification multiplier/share intercept | `1.0` | country/policy calibrated | country/policy calibrated |
+| `electrification.slope` | annual electrification trend | `0.0` | target-reaching slope | upper target-reaching slope |
+
+Scientific sources supporting this workflow:
+
+- IIASA SSP database documentation for harmonised GDP/population scenario
+  drivers and sensitivity testing: <https://iiasa.ac.at/models-tools-data/ssp>.
+- IIASA SSP basic-driver release documentation for updated GDP and population
+  projection structure through 2100:
+  <https://ssp.apps.ece.iiasa.ac.at/documentation/basic-drivers>.
+- World Bank Western Balkans energy directions report for WB6 energy-sector
+  modelling based on detailed energy balances and GDP-driven demand forecasting:
+  <https://documents1.worldbank.org/curated/en/201391544823541838/pdf/Western-Balkans-Energy-Directions-Paper.pdf>.
+- IEA electrification analysis for electrification as a structural driver and
+  efficiency-improving transition pathway:
+  <https://www.iea.org/energy-system/electricity/electrification>.
+- IEA electricity analysis for recent global electricity-demand growth drivers
+  including factories, appliances, cooling, data centres, and electric vehicles:
+  <https://www.iea.org/energy-system/electricity>.
+- Gao, Peng, and Smyth, *Energy Economics* (2021), for panel evidence that
+  income and price elasticities are non-linear and context-dependent:
+  <https://ideas.repec.org/a/eee/eneeco/v96y2021ics0140988321000736.html>.
+- Liddle and Hasanov, *Environmental and Ecological Statistics* (2023), for
+  middle-income economy-wide electricity-demand estimates and methods combining
+  panel and individual-country analyses:
+  <https://link.springer.com/article/10.1007/s10651-023-00585-4>.
+
 The optional `mode: two_stage_reform` represents the subsidy-removal transition
 as a one-time segmented price shock, then switches to a homogeneous post-reform
 market. Use the canonical keys `reform`, `shiftable_share`, `price_index`,
