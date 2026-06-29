@@ -320,6 +320,13 @@ GDP, population, and electrification growth); before 2027 demand is held at the
 workbook 2023 base demand, and `base_demand` remains the static no-reform
 counterfactual.
 
+In the bundled WB6 configs, the price-elasticity endpoints are represented
+directly in the scenario cases: `scen1_upper` uses `-0.2` and `scen1_lower`
+uses `-0.8` for both `reform.price_elasticity` and
+`post_reform_price_elasticity.value`. These are price-response parameters only;
+`income_elasticity` is a separate GDP/income-response parameter and remains a
+country/scenario assumption.
+
 Post-reform price elasticity can be fixed (`post_reform_price_elasticity.value`)
 or year-indexed (`post_reform_price_elasticity.values`). A scenario with
 decreasing price sensitivity over time should move from a more negative value
