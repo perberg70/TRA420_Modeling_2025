@@ -66,10 +66,14 @@ write_per_country_results(per_country_map, Path("results/my_run/emissions"))
 
 Demand cases can also be dynamic. Add a `dynamic_model` block inside a country
 `demand_scenarios` entry to read base electricity demand from
-`data/calc_emissions/Electricity_OECD.xlsx` and scale it by electrification,
-income/GDP, and electricity price paths. Static `values` demand cases remain
-supported. Use `TODO_SOURCE` for income, price, or electrification inputs that
-still need a data source or explicit scenario assumption; see
+`data/calc_emissions/Electricity_OECD.xlsx` and replace flat post-2027 demand
+with calculated SSP-driven demand. The current WB6 workflow scales the 2027
+post-shock demand anchor by population, GDP per capita, and an explicit
+policy electrification path; future electricity-price paths are intentionally
+omitted unless a separate scenario assumption is later supplied. Static
+`values` demand cases remain supported. Use `TODO_SOURCE` for income,
+population, or electrification inputs that still need a data source or explicit
+scenario assumption; see
 `data/calc_emissions/configs/dynamic_demand_model_example.yaml` for a standalone template and
 `docs/calc_emissions.md` for validation bounds.
 

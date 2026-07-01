@@ -69,11 +69,7 @@ def _build_total_dynamic_demand_series(
         cfg.get("income_elasticity"),
         "dynamic_model.income_elasticity",
     )
-    price_elasticity = _float_value(
-        cfg.get("price_elasticity"),
-        "dynamic_model.price_elasticity",
-    )
-    validate_elasticities(income_elasticity, price_elasticity)
+    _validate_income_elasticity(income_elasticity, "dynamic_model.income_elasticity")
 
     income = _load_driver_series(
         _required_mapping(cfg, "income", aliases=("gdp", "income_path")),
@@ -81,12 +77,16 @@ def _build_total_dynamic_demand_series(
         config_path=config_path,
         label="income",
     )
-    price = _load_driver_series(
-        _required_mapping(cfg, "price", aliases=("electricity_price", "price_path")),
-        model_years,
-        config_path=config_path,
-        label="price",
-    )
+    price = _load_optional_price_series(cfg, model_years, config_path=config_path)
+    price_elasticity = None
+    if price is not None:
+        price_elasticity = _float_value(
+            cfg.get("price_elasticity"),
+            "dynamic_model.price_elasticity",
+        )
+        _validate_price_elasticity(price_elasticity, "dynamic_model.price_elasticity")
+    elif "price_elasticity" in cfg:
+        raise ValueError("dynamic_model.price_elasticity requires a price path.")
     population = _load_optional_population(cfg, model_years, config_path=config_path)
     # With population supplied, income is interpreted as total GDP and converted
     # to GDP per capita so population growth is not double-counted.
@@ -99,7 +99,6 @@ def _build_total_dynamic_demand_series(
     )
 
     income_base = _positive_lookup(income_effective, base_year, "income base")
-    price_base = _positive_lookup(price, base_year, "price base")
     electrification_base = _positive_lookup(
         electrification,
         base_year,
@@ -110,8 +109,10 @@ def _build_total_dynamic_demand_series(
         float(base_demand_twh)
         * (electrification / electrification_base)
         * np.power(income_effective / income_base, income_elasticity)
-        * np.power(price / price_base, price_elasticity)
     )
+    if price is not None:
+        price_base = _positive_lookup(price, base_year, "price base")
+        demand = demand * np.power(price / price_base, price_elasticity)
     if population is not None:
         population_base = _positive_lookup(population, base_year, "population base")
         demand = demand * (population / population_base)
@@ -184,11 +185,18 @@ def _build_two_stage_reform_demand_series(
         income_elasticity,
         "dynamic_model.income_elasticity",
     )
-    post_reform_price_elasticity = _load_price_elasticity_series(
-        cfg,
-        model_years,
-        config_path=config_path,
-    )
+    price = _load_optional_post_reform_price_series(cfg, model_years, config_path=config_path)
+    post_reform_price_elasticity = None
+    if price is not None:
+        post_reform_price_elasticity = _load_price_elasticity_series(
+            cfg,
+            model_years,
+            config_path=config_path,
+        )
+    elif any(key in cfg for key in ("post_reform_price_elasticity", "C_t")):
+        raise ValueError(
+            "dynamic_model.post_reform_price_elasticity requires a post_reform_price path."
+        )
 
     income = _load_driver_series(
         _required_mapping(cfg, "income", aliases=("gdp", "income_path")),
@@ -196,7 +204,6 @@ def _build_two_stage_reform_demand_series(
         config_path=config_path,
         label="income",
     )
-    price = _load_post_reform_price_series(cfg, model_years, config_path=config_path)
     population = _load_optional_population(cfg, model_years, config_path=config_path)
     # With population supplied, income is interpreted as total GDP and converted
     # to GDP per capita so population growth is not double-counted.
@@ -210,7 +217,6 @@ def _build_two_stage_reform_demand_series(
 
     demand_reform = residual_twh + shiftable_twh * (reform_price_index**reform_price_elasticity)
     income_reform = _positive_lookup(income_effective, reform_year, "income reform")
-    price_reform = _positive_lookup(price, reform_year, "price reform")
     electrification_reform = _positive_lookup(
         electrification,
         reform_year,
@@ -221,8 +227,10 @@ def _build_two_stage_reform_demand_series(
         float(demand_reform)
         * (electrification / electrification_reform)
         * np.power(income_effective / income_reform, income_elasticity)
-        * np.power(price / price_reform, post_reform_price_elasticity)
     )
+    if price is not None:
+        price_reform = _positive_lookup(price, reform_year, "price reform")
+        demand = demand * np.power(price / price_reform, post_reform_price_elasticity)
     if population is not None:
         population_reform = _positive_lookup(population, reform_year, "population reform")
         demand = demand * (population / population_reform)
@@ -235,13 +243,35 @@ def _build_two_stage_reform_demand_series(
     )
 
 
-def _load_post_reform_price_series(
+def _load_optional_price_series(
     cfg: Mapping[str, object],
     years: Sequence[int],
     *,
     config_path: Path,
-) -> pd.Series:
-    """Return the post-reform price path, defaulting to a constant index of 1.0."""
+) -> pd.Series | None:
+    """Return an optional total-mode price path when one is explicitly configured."""
+
+    for key in ("price", "electricity_price", "price_path"):
+        value = cfg.get(key)
+        if isinstance(value, Mapping):
+            return _load_driver_series(
+                value,
+                years,
+                config_path=config_path,
+                label="price",
+            )
+        if value is not None:
+            raise TypeError(f"dynamic_model.{key} must be a mapping.")
+    return None
+
+
+def _load_optional_post_reform_price_series(
+    cfg: Mapping[str, object],
+    years: Sequence[int],
+    *,
+    config_path: Path,
+) -> pd.Series | None:
+    """Return a post-reform price path only when explicitly configured."""
 
     for key in ("post_reform_price", "price", "electricity_price", "price_path"):
         value = cfg.get(key)
@@ -254,14 +284,7 @@ def _load_post_reform_price_series(
             )
         if value is not None:
             raise TypeError(f"dynamic_model.{key} must be a mapping.")
-    # Default: hold the homogeneous post-reform price constant at the
-    # reform-year level (price index 1.0 for every year).
-    return pd.Series(
-        1.0,
-        index=pd.Index([int(year) for year in years]),
-        dtype=float,
-        name="post_reform_price",
-    )
+    return None
 
 
 def _load_optional_population(

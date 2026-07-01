@@ -217,6 +217,57 @@ def test_dynamic_demand_population_uses_per_capita_income_and_scales_demand(tmp_
     assert demand.loc[2025] == pytest.approx(expected)
 
 
+def test_dynamic_demand_population_can_omit_price_path(tmp_path: Path):
+    workbook = tmp_path / "Electricity_OECD.xlsx"
+    _write_reference_workbook(workbook)
+    cfg = {
+        "base_demand": {
+            "source": str(workbook),
+            "country_code": "TST",
+            "demand_column": "Total electricity demand",
+            "year": 2023,
+        },
+        # Total GDP grows 21%, population 10% => GDP per capita grows 10%.
+        "income": {"values": {2023: 100.0, 2025: 121.0}},
+        "population": {"values": {2023: 1.0, 2025: 1.1}},
+        "electrification": {"form": "linear_time", "A": 0.5, "B": 0.0},
+        "income_elasticity": 1.0,
+    }
+
+    demand = build_dynamic_demand_series(
+        cfg,
+        [2025],
+        config_path=tmp_path / "config.yaml",
+    )
+
+    expected = 30.021 * 1.1 * (110.0 / 100.0) ** 1.0
+    assert demand.loc[2025] == pytest.approx(expected)
+
+
+def test_dynamic_demand_rejects_price_elasticity_without_price_path(tmp_path: Path):
+    workbook = tmp_path / "Electricity_OECD.xlsx"
+    _write_reference_workbook(workbook)
+    cfg = {
+        "base_demand": {
+            "source": str(workbook),
+            "country_code": "TST",
+            "demand_column": "Total electricity demand",
+            "year": 2023,
+        },
+        "income": {"values": {2023: 100.0, 2025: 121.0}},
+        "electrification": {"form": "linear_time", "A": 0.5, "B": 0.0},
+        "income_elasticity": 1.0,
+        "price_elasticity": -0.2,
+    }
+
+    with pytest.raises(ValueError, match="price_elasticity requires a price path"):
+        build_dynamic_demand_series(
+            cfg,
+            [2025],
+            config_path=tmp_path / "config.yaml",
+        )
+
+
 def test_dynamic_demand_filters_driver_sources(tmp_path: Path):
     workbook = tmp_path / "Electricity_OECD.xlsx"
     _write_reference_workbook(workbook)
@@ -358,10 +409,9 @@ def test_two_stage_reform_with_workbook_inputs_and_default_post_reform_price(
             "price_elasticity": -0.5,
         },
         "income": {"values": {2023: 100.0, 2027: 100.0, 2030: 100.0}},
-        # post_reform_price intentionally omitted: defaults to constant index 1.0.
+        # post_reform_price intentionally omitted: no post-2027 price term is applied.
         "electrification": {"form": "linear_time", "A": 0.5, "B": 0.0},
         "income_elasticity": 1.0,
-        "post_reform_price_elasticity": {"value": -0.4},
     }
 
     demand = build_dynamic_demand_series(
@@ -395,7 +445,6 @@ def test_two_stage_reform_population_scales_post_reform_demand(tmp_path: Path):
         "population": {"values": {2023: 1.0, 2027: 1.0, 2030: 1.1}},
         "electrification": {"form": "linear_time", "A": 0.5, "B": 0.0},
         "income_elasticity": 1.0,
-        "post_reform_price_elasticity": {"value": -0.4},
     }
 
     demand = build_dynamic_demand_series(
@@ -407,6 +456,38 @@ def test_two_stage_reform_population_scales_post_reform_demand(tmp_path: Path):
     expected_reform = 60.0 + 40.0 * (96.0 / 80.0) ** -0.5
     assert demand.loc[2027] == pytest.approx(expected_reform)
     assert demand.loc[2030] == pytest.approx(expected_reform * 1.1)
+
+
+def test_two_stage_reform_rejects_post_reform_price_elasticity_without_price_path(
+    tmp_path: Path,
+):
+    workbook = tmp_path / "Electricity_OECD.xlsx"
+    _write_reform_workbook(workbook)
+    cfg = {
+        "mode": "two_stage_reform",
+        "base_year": 2023,
+        "reform_year": 2027,
+        "base_demand": _reform_base_cfg(workbook),
+        "reform": {
+            "shiftable_share": {"source": "workbook"},
+            "price_index": {"source": "workbook", "bound": "lower"},
+            "price_elasticity": -0.5,
+        },
+        "income": {"values": {2023: 100.0, 2027: 100.0, 2030: 100.0}},
+        "electrification": {"form": "linear_time", "A": 0.5, "B": 0.0},
+        "income_elasticity": 1.0,
+        "post_reform_price_elasticity": {"value": -0.4},
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="post_reform_price_elasticity requires a post_reform_price path",
+    ):
+        build_dynamic_demand_series(
+            cfg,
+            [2027, 2030],
+            config_path=tmp_path / "config.yaml",
+        )
 
 
 def test_two_stage_reform_holds_pre_reform_years_at_workbook_base_and_derives_segments(

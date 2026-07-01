@@ -10,8 +10,9 @@
 # Optional population block (shown in every template below): when present the
 # income driver is interpreted as TOTAL GDP and converted internally to GDP
 # per capita, and demand is additionally scaled by Pop_t / Pop_ref:
-#   D_t = D_ref * (Pop_t/Pop_ref) * (e_t/e_ref) * (y_t/y_ref)^B * (P_t/P_ref)^C
-# Omit the population block to keep the original total-income formula.
+#   D_t = D_ref * (Pop_t/Pop_ref) * (e_t/e_ref) * (y_t/y_ref)^B
+# Omit the population block to keep the original total-income formula. Future
+# price paths are omitted from the default template unless added explicitly.
 
 calc_emissions:
   demand_scenarios:
@@ -39,15 +40,11 @@ calc_emissions:
           value_column: value
           filters:
             scenario: SSP2
-        price:
-          source: TODO_SOURCE
-          value_column: TODO_SOURCE
         electrification:
           form: linear_time
           A: TODO_SOURCE
           slope: TODO_SOURCE
         income_elasticity: TODO_SOURCE  # B, must be >= 1.0
-        price_elasticity: TODO_SOURCE  # C, must satisfy -0.8 <= C <= -0.2
 
     dynamic_linear_income:
       description: Dynamic electricity demand using income-based electrification.
@@ -73,15 +70,11 @@ calc_emissions:
           value_column: value
           filters:
             scenario: SSP2
-        price:
-          source: TODO_SOURCE
-          value_column: TODO_SOURCE
         electrification:
           form: linear_income
           base_share: TODO_SOURCE
           slope: TODO_SOURCE
         income_elasticity: TODO_SOURCE  # B, must be >= 1.0
-        price_elasticity: TODO_SOURCE  # C, must satisfy -0.8 <= C <= -0.2
 
     dynamic_two_stage_reform:
       description: Dynamic demand with a one-time subsidy-removal shock in 2027.
@@ -123,21 +116,11 @@ calc_emissions:
           value_column: value
           filters:
             scenario: SSP2
-        # post_reform_price is optional. When omitted the homogeneous
-        # post-reform price is held constant at the reform-year level
-        # (index 1.0 in every year). Provide a path to override:
-        # post_reform_price:
-        #   source: TODO_SOURCE
-        #   value_column: TODO_SOURCE
+        # post_reform_price is intentionally omitted from the default WB6
+        # workflow. Add post_reform_price and post_reform_price_elasticity only
+        # if a defensible future price-index scenario is supplied later.
         electrification:
           form: linear_income
           base_share: TODO_SOURCE
           slope: TODO_SOURCE
         income_elasticity: TODO_SOURCE  # B, must be >= 1.0
-        post_reform_price_elasticity:
-          value: TODO_SOURCE  # Fixed C_t, -0.8 <= C_t <= -0.2
-          # Or use year-indexed C_t values with decreasing price sensitivity:
-          # values:
-          #   2027: -0.6
-          #   2035: -0.4
-          #   2050: -0.2
