@@ -1,0 +1,11 @@
+- id: jrc_urban_pm25_atlas_2025
+  title: Urban PM2.5 Atlas - Air Quality in Cities of Countries involved in the EU Enlargement policy
+  authors: EU JRC
+  year: 2025
+  url: https://publications.jrc.ec.europa.eu
+  topics:
+  - air_pollution
+  - source_apportionment
+  verification_status: unconfirmed
+  notes: 40 percent of urban PM2.5 attributed to residential combustion; source apportionment
+  date_added: '2026-07-09'

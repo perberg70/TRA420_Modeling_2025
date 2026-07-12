@@ -12,3 +12,5 @@ config.yaml
 .vscode/launch.json
 .pytest_tmp*/
 .pytest_cache/
+
+.cursor/
