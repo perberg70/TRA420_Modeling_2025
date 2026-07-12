@@ -41,6 +41,7 @@ final_energy.csv, 6 grid variants:
 | 21 | 18 | full 5-yearly 2015–2100, no 2010 |
 | 5 | 19 | 15-pt grid + annual 2021–2024 (MESSAGEix COVID-Shift) |
 | 2 | 10 | decadal 2010–2100 (new variant, not seen in ssp1-19) |
+NOTE (added 2026-07-12, after ssp3-70 verification): the two 19-point rows above are DISTINCT grids with equal point counts — full 5-yearly vs. 15-pt+annual-2021–2024. Grid identity must be established from year lists, never point counts alone; a point-count summary silently merged two 19-pt variants during the ssp3-70 pull before assertion-checking caught it. Counts in this table were re-verified against the committed files 2026-07-12 and are correct.
 Year-indexed ensemble statistics draw on different pair subsets per year; verify per-year pair coverage before computing medians. No interpolation policy is adopted by default.
 
 ## Provenance of this MANIFEST
