@@ -1,0 +1,154 @@
+# =============================================================================
+# emission_factors.yaml — emission-factor configuration for the calc_emissions
+# module (DRAFT — all values UNSOURCED, pending verification against the
+# EMEP/EEA Air Pollutant Emission Inventory Guidebook).
+#
+# Schema (v2 — revised after Codex structural review, 2026-07-19)
+# ---------------------------------------------------------------
+# Units: all emission factors are expressed in kt pollutant per PJ fuel input
+#        (kt/PJ). District heat is a delivered-energy carrier: its combustion
+#        occurs upstream at plant level, not at the point of consumption. Its
+#        entry therefore carries a per-fuel `release_height: high` override
+#        (see below) and its EF value — like every other value — must be
+#        sourced and given provenance; how upstream allocation is treated is a
+#        methodological decision to be documented when the value is entered,
+#        not presumed here.
+#
+# INTEGRATION STATUS (gap flag): this file is NOT yet consumed by any loader.
+# src/calc_emissions/calculator.py currently reads per-country CSV emission
+# factors in kg/kWh (electricity technologies). Wiring this schema into the
+# code, and reconciling kt/PJ (fuel input) with kg/kWh (electricity output),
+# is pending work — do not assume these values reach the model until a loader
+# exists and documents the unit conversion.
+#
+# Pollutant registry:
+#   `pollutants` maps stable machine keys (used as factor keys throughout this
+#   file and in code) to display metadata. To add a pollutant, add one registry
+#   entry and the corresponding key under each fuel's `factors` block; loaders
+#   must validate that every fuel provides every registered pollutant.
+#
+# Source classes (generic IDs, region-agnostic):
+#   Class names are arbitrary identifiers, not semantics baked into code.
+#   Each class carries its own metadata (`description`, `release_height`) so
+#   downstream exposure treatment is driven by the metadata, not the class
+#   name. The two classes below reflect the current two-stream design:
+#     stack  — large point sources (power-sector fuel combustion, high release
+#              height, stack-dispersion assumptions downstream)
+#     ground — distributed ground-level sources (residential heating carriers,
+#              low release height, ground-level exposure assumptions
+#              downstream)
+#   Fuel lists under each class are data, not schema: other regions may supply
+#   a different fuel taxonomy without structural changes.
+#
+# Factor entry structure (per fuel, per pollutant machine key):
+#   value          : numeric EF in kt/PJ for a time-invariant factor, or null
+#                    while unsourced
+#   values_by_year : OPTIONAL map {YYYY: EF} for time-varying factors (e.g.
+#                    abatement retrofits); mutually exclusive with `value`.
+#                    Omitted below — add per entry when a sourced trajectory
+#                    exists.
+#   status         : UNSOURCED | PROXIED | TRANSFERRED | INTERPOLATED |
+#                    VERIFIED — per AGENTS.md gap-flagging: PROXIED (stands in
+#                    from a similar fuel/technology), TRANSFERRED (taken from
+#                    another region), INTERPOLATED (derived between literature
+#                    points). Any non-UNSOURCED status requires the provenance
+#                    block filled with the basis of the value; only VERIFIED
+#                    means the exact figure was confirmed in the cited source.
+#   release_height : OPTIONAL per-fuel override of the class-level release
+#                    height, for carriers whose physical emission point
+#                    differs from their accounting class (e.g. district_heat).
+#   provenance     : mandatory block —
+#     source    : full citation of the EF source (e.g. EMEP/EEA Guidebook 2023)
+#     tier      : methodological tier of the source method (e.g. "Tier 1")
+#     year      : publication/edition year of the source
+#     table_ref : exact table or section locator within the source
+#
+# Country overrides:
+#   This file holds region-agnostic default EFs. Country-specific deviations
+#   belong under `country_overrides`, mirroring the source_classes structure
+#   per country name; model code must never branch on country names directly.
+#
+# Discipline: no numeric value may be entered without simultaneously filling
+# the provenance block and setting the appropriate status. UNSOURCED is not
+# permitted alongside a non-null value; PROXIED/TRANSFERRED/INTERPOLATED must
+# record the basis of the substitution in provenance; VERIFIED is reserved for
+# figures confirmed exactly in the cited source.
+# =============================================================================
+
+schema_version: 2
+units: kt_per_PJ
+
+pollutants:
+  pm25: {label: "PM2.5"}
+  so2:  {label: "SO2"}
+  nox:  {label: "NOx"}
+
+source_classes:
+
+  stack:
+    description: Power-sector point-source combustion
+    release_height: high
+    fuels:
+      lignite:
+        factors:
+          pm25: {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          so2:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          nox:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+      hard_coal:
+        factors:
+          pm25: {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          so2:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          nox:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+      natural_gas:
+        factors:
+          pm25: {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          so2:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          nox:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+      oil:
+        factors:
+          pm25: {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          so2:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          nox:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+      biomass:
+        factors:
+          pm25: {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          so2:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          nox:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+
+  ground:
+    description: Residential ground-level combustion carriers
+    release_height: low
+    fuels:
+      fuelwood:
+        factors:
+          pm25: {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          so2:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          nox:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+      coal:
+        factors:
+          pm25: {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          so2:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          nox:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+      natural_gas:
+        factors:
+          pm25: {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          so2:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          nox:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+      heating_oil:
+        factors:
+          pm25: {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          so2:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          nox:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+      district_heat:
+        # Delivered-energy carrier: combustion happens upstream at plant level.
+        # Override keeps exposure treatment honest despite residential
+        # accounting placement; loaders must use this, not the class default.
+        release_height: high
+        factors:
+          pm25: {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          so2:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+          nox:  {value: null, status: UNSOURCED, provenance: {source: null, tier: null, year: null, table_ref: null}}
+
+# Region-agnostic defaults above; country-specific deviations go here, keyed
+# by country name and mirroring the source_classes structure. Empty by design.
+country_overrides: {}
