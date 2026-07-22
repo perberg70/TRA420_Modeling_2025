@@ -1,5 +1,7 @@
 results/
 test_results/
+build/
+dist/
 __pycache__/
 .DS_Store
 TRA420_Modeling_2025.code-workspace

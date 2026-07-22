@@ -3,12 +3,39 @@ name = "tra420-modeling"
 version = "0.1.0"
 description = "Pipeline for TRA420 energy-emissions-climate modeling"
 requires-python = ">=3.11"
-dynamic = ["dependencies"]
+# Direct third-party imports of src/ and scripts/. Lower bounds mirror
+# environment.yaml, which remains the canonical environment spec (conda env
+# `tra420-modeling`; see README). Two entries there are deliberately absent
+# here: scipy (not imported directly, arrives transitively via fair) and
+# streamlit (placeholder for a GUI that is not yet implemented).
+dependencies = [
+    "fair>=2.2.2",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "openpyxl>=3.1",
+    "pandas>=2.1",
+    "pyyaml>=6.0",
+]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0",
+    "pytest>=8.4",
 ]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+# Explicit src-layout discovery. Reproduces what auto-discovery previously
+# recorded in top_level.txt: the six packages under src/ plus the top-level
+# config_paths module. scripts/ is deliberately not packaged — those are run
+# as entry-point scripts and self-bootstrap via scripts/_path_setup.py.
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["config_paths"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 markers = [
